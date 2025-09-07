@@ -1,0 +1,135 @@
+using Gtk 4.0;
+using Adw 1;
+
+template SpruceWindow : Adw.ApplicationWindow {
+  title: "Spruce";
+  default-width: 960;
+  default-height: 600;
+
+  content: Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar {
+      title-widget: Adw.WindowTitle {
+        title: "Spruce";
+        subtitle: "Cleaner";
+      };
+    }
+
+    content: Adw.Clamp {
+      maximum-size: 1100;
+
+      child: Gtk.Box {
+        orientation: horizontal;
+        spacing: 24;
+        margin-top: 24;
+        margin-bottom: 24;
+        margin-start: 24;
+        margin-end: 24;
+
+        /* LEFT column — storage pie chart card */
+        Gtk.Box {
+          orientation: vertical;
+          spacing: 12;
+          hexpand: true;
+
+          Gtk.Frame {
+            css-classes: ["card"];
+
+            child: Gtk.Box {
+              orientation: vertical;
+              margin-top: 12;
+              margin-bottom: 12;
+              margin-start: 12;
+              margin-end: 12;
+
+              Gtk.DrawingArea pie_chart {
+                content-width: 360;
+                content-height: 260;
+                hexpand: true;
+                vexpand: true;
+              }
+            };
+          }
+        }
+
+        /* RIGHT column — buttons + packages card + info rows */
+        Gtk.Box {
+          orientation: vertical;
+          spacing: 18;
+          hexpand: true;
+
+          /* top buttons */
+          Gtk.Box {
+            spacing: 12;
+
+            Gtk.Button clear_btn {
+              label: "Clear temp";
+              css-classes: ["pill"];
+              halign: start;
+            }
+
+            Gtk.Button options_btn {
+              label: "Options";
+              css-classes: ["pill"];
+              halign: start;
+            }
+          }
+
+          /* packages card */
+          Gtk.Frame {
+            css-classes: ["card"];
+            hexpand: true;
+            vexpand: true;
+
+            child: Gtk.Box {
+              orientation: vertical;
+              spacing: 12;
+              margin-top: 16;
+              margin-bottom: 16;
+              margin-start: 16;
+              margin-end: 16;
+
+              Gtk.Label {
+                label: "These packages are no longer required";
+                css-classes: ["title-3"];
+                halign: start;
+              }
+
+              Gtk.ScrolledWindow {
+                hexpand: true;
+                vexpand: true;
+
+                child: Gtk.Label pkg_list {
+                  wrap: true;
+                  selectable: true;
+                  xalign: 0.0;
+                  label: "Loading…";
+                };
+              }
+
+              Gtk.Button remove_btn {
+                label: "Remove";
+                css-classes: ["suggested-action"];
+                halign: center;
+              }
+            };
+          }
+
+          /* info rows – keep plain text, escape angle brackets */
+          Adw.ActionRow {
+            title: "App caches";
+            subtitle: "~/.cache/&lt;app&gt;, ~/.var/app/*/cache";
+            activatable: false;
+          }
+
+          Adw.ActionRow {
+            title: "Privacy";
+            subtitle: "Recently used list";
+            activatable: false;
+          }
+        }
+      };
+    };
+  };
+}
+

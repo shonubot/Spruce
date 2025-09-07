@@ -1,0 +1,10 @@
+
+[Desktop Entry]
+Name=Spruce
+Comment=Clean up app caches easily
+Exec=spruce
+Icon=io.github.shonubot.Spruce
+Terminal=false
+Type=Application
+Categories=Utility;System;
+StartupNotify=true

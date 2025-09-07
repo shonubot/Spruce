@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <title>Spruce – GNOME App Icon (even bigger)</title>
+
+  <!-- Transparent background -->
+  <rect width="128" height="128" fill="none"/>
+
+  <!-- Base (nearly edge to edge) -->
+  <rect x="20" y="98" width="88" height="16" rx="8" fill="#3F4549"/>
+
+  <!-- Tube (thicker, taller, closer to top) -->
+  <rect x="61" y="26" width="12" height="74" rx="6" fill="#FFFFFF"/>
+
+  <!-- Neck joint -->
+  <rect x="59" y="92" width="16" height="12" rx="6" fill="#FFFFFF"/>
+
+  <!-- Handle -->
+  <path d="M74 26v-12c0-8-6-14-14-14h-7a6 6 0 1 0 0 12h7c1.6 0 3 1.4 3 3v11h11z" fill="#FFFFFF"/>
+
+  <!-- Pod bracket -->
+  <rect x="58" y="52" width="8" height="18" rx="4" fill="#FFFFFF"/>
+
+  <!-- Motor pod (largest yet) -->
+  <ellipse cx="50" cy="64" rx="22" ry="20" fill="#34C46B"/>
+  <ellipse cx="50" cy="64" rx="16" ry="12" fill="#6FDD97"/>
+
+  <!-- Vents (longer) -->
+  <rect x="38" y="60" width="24" height="2" rx="1" fill="#2BA35A"/>
+  <rect x="38" y="64" width="24" height="2" rx="1" fill="#2BA35A"/>
+  <rect x="38" y="68" width="24" height="2" rx="1" fill="#2BA35A"/>
+</svg>
