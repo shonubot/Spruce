@@ -29,14 +29,14 @@
     <color type="primary" scheme_preference="dark">#60d267</color>
   </branding>
 
-  <description>
-    <p>Spruce safely clears app caches to free space and fix odd glitches.</p>
-    <ul>
-      <li>Scan common cache locations</li>
-      <li>Preview what will be removed</li>
-      <li>One-click clean</li>
-    </ul>
-  </description>
+<description>
+  <p>Spruce helps you safely reclaim disk space by removing application cache files that build up over time. It scans common locations, shows you exactly what will be deleted, and lets you clean with a single click—reducing glitches and keeping your system feeling fresh.</p>
+  <ul>
+    <li>Scan common cache locations</li>
+    <li>Preview what will be removed</li>
+    <li>One-click clean</li>
+  </ul>
+</description>
 
   <releases>
     <release version="0.1.0" date="2025-09-01">
