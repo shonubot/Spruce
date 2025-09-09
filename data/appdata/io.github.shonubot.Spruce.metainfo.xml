@@ -23,6 +23,12 @@
     <category>System</category>
   </categories>
 
+  <!-- Flathub brand colors -->
+  <branding>
+    <color type="primary" scheme_preference="light">#81cf85</color>
+    <color type="primary" scheme_preference="dark">#60d267</color>
+  </branding>
+
   <description>
     <p>Spruce safely clears app caches to free space and fix odd glitches.</p>
     <ul>
@@ -34,7 +40,7 @@
 
   <releases>
     <release version="0.1.0" date="2025-09-01">
-      <description><p>Initial commit.</p></description>
+      <description><p>Initial release.</p></description>
     </release>
   </releases>
 
@@ -51,5 +57,3 @@
 
   <content_rating type="oars-1.1"/>
 </component>
-
-
