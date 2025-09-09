@@ -602,11 +602,14 @@ class SpruceWindow(Adw.ApplicationWindow):
         # Calculate available space for percentage text on the right
         chart_space_w = w * 0.6  # Give the chart 60% of the width
         text_space_w = w * 0.4  # Give the text 40% of the width
-        size = max(0, min(chart_space_w, h) - pad * 2)
+        
+        # Calculate radius based on the smaller of the chart space dimensions
+        size = min(chart_space_w, h) - (2 * pad)
         r = size / 2
         
-        # Position the pie chart on the left side
-        cx, cy = pad + r, pad + r
+        # Position the pie chart on the left side, centered vertically
+        cx = pad + r
+        cy = h / 2
 
         # Background ring
         set_hex(col_bg)
@@ -661,8 +664,14 @@ class SpruceWindow(Adw.ApplicationWindow):
             layout.set_font_description(Pango.FontDescription("Cantarell 12"))
             tw, th = layout.get_pixel_size()
 
-            tx = max(pad, min(chart_space_w - pad - tw, ex + (8 if math.cos(angle_mid) >= 0 else -tw - 8)))
-            ty = max(pad, min(h - pad - th, ey - th / 2))
+            # Adjust text positioning based on the angle and the chart's new position
+            tx = ex + 8 if math.cos(angle_mid) >= 0 else ex - tw - 8
+            ty = ey - th / 2
+            
+            # Clamp the position to prevent it from going out of bounds
+            tx = max(pad, min(w - pad - tw, tx))
+            ty = max(pad, min(h - pad - th, ty))
+
             set_hex("#e8f3ff" if color_hex == col_used else "#defcee")
             cr.move_to(tx, ty)
             PangoCairo.show_layout(cr, layout)
