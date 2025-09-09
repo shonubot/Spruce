@@ -31,20 +31,18 @@ IS_FLATPAK = os.environ.get("FLATPAK_ID") == APP_ID
 
 # ─────────────────────────── helpers ─────────────────────────
 
-
 def _find_ui() -> str:
     """Locate ui/window.ui both in dev trees and in Flatpak installs."""
     here = Path(__file__).resolve()
     candidates = [
-        here.parent.parent / "ui" / "window.ui", # repo: src/spruce/ -> ../../ui/window.ui
-        Path.cwd() / "ui" / "window.ui", # running from repo root
-        Path("/app/share/io.github.shonubot.Spruce/ui/window.ui"), # Flatpak
+        here.parent.parent / "ui" / "window.ui",                              # repo: src/spruce -> ../../ui/window.ui
+        Path.cwd() / "ui" / "window.ui",                                      # running from repo root
+        Path("/app/share/io.github.shonubot.Spruce/ui/window.ui"),            # Flatpak (recommended install path)
         Path("/app/share/spruce/ui/window.ui"),
     ]
     for p in candidates:
         if p.exists():
             return str(p)
-    # Last-ditch relative path so dev runs don’t crash outright
     return str(Path("ui") / "window.ui")
 
 
@@ -69,7 +67,6 @@ def _gio_fs_usage(path: Path) -> Tuple[int, int, int] | None:
         total = int(info.get_attribute_uint64("filesystem::size"))
         free = int(info.get_attribute_uint64("filesystem::free"))
         used = max(0, total - free)
-        # Basic sanity: ignore obviously bogus answers
         if total > 0 and free >= 0 and used >= 0:
             return total, used, free
     except Exception:
@@ -85,8 +82,8 @@ def _host_view(path: Path) -> Path:
     if not IS_FLATPAK:
         return path
     try:
-        rel = path.resolve().relative_to("/") # e.g. 'home/USER'
-        host = Path("/run/host") / rel # e.g. /run/host/home/USER
+        rel = path.resolve().relative_to("/")  # e.g. 'home/USER'
+        host = Path("/run/host") / rel         # e.g. /run/host/home/USER
         if host.exists():
             return host
     except Exception:
@@ -104,16 +101,13 @@ def disk_usage_home() -> Tuple[int, int, int]:
     """
     candidates: list[Path] = []
     if IS_FLATPAK:
-        # Best: the host's actual home
         try:
             candidates.append(_host_view(Path.home()))
-            candidates.append(Path("/run/host")) # fall back to host root if needed
+            candidates.append(Path("/run/host"))
         except Exception:
             candidates.append(Path("/run/host"))
-    # Always include sandbox home as last resort
     candidates.append(Path.home())
 
-    # First try GIO (more accurate on bind mounts), then fall back to shutil
     for p in candidates:
         ans = _gio_fs_usage(p)
         if ans:
@@ -126,7 +120,6 @@ def disk_usage_home() -> Tuple[int, int, int]:
         except Exception:
             continue
 
-    # Should never hit this; keep UI alive
     return 1, 0, 1
 
 
@@ -134,6 +127,20 @@ def xdg_cache() -> Path:
     # In Flatpak this is usually ~/.var/app/<app>/cache
     return Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
 
+
+def _is_flatpak() -> bool:
+    return IS_FLATPAK
+
+
+def _host_flatpak_cmd(*args: str) -> list[str]:
+    """
+    Use host flatpak when sandboxed; otherwise normal flatpak.
+    """
+    return (["flatpak-spawn", "--host", "flatpak", *args]
+            if _is_flatpak() else ["flatpak", *args])
+
+
+# ─────────────────── package / cleanup helpers ───────────────────
 
 def list_apt_autoremove() -> List[str]:
     """Host-only: parse apt-get --dry-run autoremove for packages."""
@@ -147,82 +154,92 @@ def list_apt_autoremove() -> List[str]:
     except Exception:
         return []
 
-def list_flatpak_unused() -> List[str]:
-    """
-    List runtimes and extensions that can be uninstalled.
-    Returns a list of `id/arch/branch` strings.
-    """
-    unused = []
-    # Check for user-level unused packages
-    try:
-        # We use GLib.spawn_sync to synchronously get the output.
-        _res, out, _err, _status = GLib.spawn_sync(
-            None,
-            ["flatpak", "uninstall", "--unused", "--dry-run", "--columns=ref"],
-            None,
-            GLib.SpawnFlags.SEARCH_PATH | GLib.SpawnFlags.STDOUT_TO_PIPE,
-            None,
-        )
-        if out is not None:
-            # Decode output and split into lines.
-            lines = out.decode('utf-8').strip().splitlines()
-            # Filter out the header line which usually says 'Ref'
-            unused.extend([line for line in lines if line and not line.startswith('Ref')])
-    except GLib.Error:
-        pass
-    except Exception:
-        pass
-    
-    # Check for system-level unused packages (requires elevated privileges)
-    try:
-        _res, out, _err, _status = GLib.spawn_sync(
-            None,
-            ["pkexec", "flatpak", "uninstall", "--unused", "--dry-run", "--system", "--columns=ref"],
-            None,
-            GLib.SpawnFlags.SEARCH_PATH | GLib.SpawnFlags.STDOUT_TO_PIPE,
-            None,
-        )
-        if out is not None:
-            lines = out.decode('utf-8').strip().splitlines()
-            unused.extend([line for line in lines if line and not line.startswith('Ref')])
-    except GLib.Error:
-        pass
-    except Exception:
-        pass
 
-    return unused
+def _flatpak_dryrun_refs(scope: str) -> list[str]:
+    """
+    Return list of refs from a dry-run uninstall in the given scope ('--user' or '--system').
+    Works without pkexec; it's read-only.
+    """
+    cmd = _host_flatpak_cmd("uninstall", "--unused", "--dry-run", scope, "--columns=ref")
+    try:
+        _res, out, _err, _st = GLib.spawn_sync(
+            None, cmd, None,
+            GLib.SpawnFlags.SEARCH_PATH | GLib.SpawnFlags.STDOUT_TO_PIPE,
+            None
+        )
+        if not out:
+            return []
+        lines = out.decode("utf-8", "replace").strip().splitlines()
+        return [ln.strip() for ln in lines if ln and not ln.lower().startswith("ref")]
+    except Exception:
+        return []
+
+
+def list_flatpak_unused() -> list[str]:
+    """
+    Detect unused runtimes/extensions in both user and system installations.
+    Returns refs like id/arch/branch. No privileges needed (dry-run).
+    """
+    refs = []
+    refs.extend(_flatpak_dryrun_refs("--user"))
+    refs.extend(_flatpak_dryrun_refs("--system"))
+    # De-dup while preserving order
+    seen, out = set(), []
+    for r in refs:
+        if r not in seen:
+            seen.add(r)
+            out.append(r)
+    return out
 
 
 def run_combined_autoremove_async(on_done) -> None:
     """
-    Launch a single pkexec command to remove both apt and Flatpak unused packages.
+    Outside Flatpak: remove both apt and system flatpak unused (requires polkit).
     """
-    # Create a single command string with a shell to run both
     cmd = "apt autoremove -y; flatpak uninstall --unused --system -y"
     try:
         pid, _, _ = GLib.spawn_async(
             ["pkexec", "sh", "-c", cmd],
             flags=GLib.SpawnFlags.SEARCH_PATH,
         )
+
         def _after(_pid, _cond):
             GLib.timeout_add_seconds(2, on_done)
+
         GLib.child_watch_add(GLib.PRIORITY_DEFAULT, pid, _after)
     except Exception:
         GLib.timeout_add_seconds(2, on_done)
 
+
 def run_flatpak_autoremove_async(on_done) -> None:
-    """Launch flatpak uninstall --unused -y, then call on_done() shortly after."""
-    try:
-        # Use --system to handle system-wide unused packages
-        pid, _, _ = GLib.spawn_async(
-            ["pkexec", "flatpak", "uninstall", "--unused", "--system", "-y"],
-            flags=GLib.SpawnFlags.SEARCH_PATH,
-        )
-        def _after(_pid, _cond):
-            GLib.timeout_add_seconds(2, on_done)
-        GLib.child_watch_add(GLib.PRIORITY_DEFAULT, pid, _after)
-    except Exception:
-        GLib.timeout_add_seconds(2, on_done)
+    """
+    Perform the actual Flatpak removal:
+      - user scope: no elevation needed
+      - system scope: run host flatpak; polkit may prompt if required
+    """
+    user_cmd = _host_flatpak_cmd("uninstall", "--unused", "--user", "-y")
+    sys_cmd = _host_flatpak_cmd("uninstall", "--unused", "--system", "-y")
+
+    def _spawn(cmd):
+        try:
+            pid, _, _ = GLib.spawn_async(cmd, flags=GLib.SpawnFlags.SEARCH_PATH)
+            return pid
+        except Exception:
+            return None
+
+    pid1 = _spawn(user_cmd)
+
+    def after_user(_pid, _cond):
+        pid2 = _spawn(sys_cmd)
+        if pid2:
+            GLib.child_watch_add(GLib.PRIORITY_DEFAULT, pid2, lambda *_: GLib.timeout_add_seconds(1, on_done))
+        else:
+            GLib.timeout_add_seconds(1, on_done)
+
+    if pid1:
+        GLib.child_watch_add(GLib.PRIORITY_DEFAULT, pid1, after_user)
+    else:
+        after_user(None, None)
 
 
 def dir_size(path: Path) -> int:
@@ -251,7 +268,6 @@ class SpruceWindow(Adw.ApplicationWindow):
     pie_chart: Gtk.DrawingArea = Gtk.Template.Child("pie_chart")
     clear_btn: Gtk.Button = Gtk.Template.Child("clear_btn")
     options_btn: Gtk.Button = Gtk.Template.Child("options_btn")
-    # Using the existing UI components from the blueprint.
     pkg_list: Gtk.Label = Gtk.Template.Child("pkg_list")
     remove_btn: Gtk.Button = Gtk.Template.Child("remove_btn")
 
@@ -277,11 +293,10 @@ class SpruceWindow(Adw.ApplicationWindow):
             "webkit": True,
             "fontconf": True,
             "mesa": True,
-            "sweep": True, # enabled by default
+            "sweep": True,  # enabled by default
         }
 
-        # Instance variable to hold the toast message so we can dismiss it later
-        self._current_toast = None
+        self._current_toast = None  # active toast dialog
 
         # Initial UI refresh
         self._refresh_autoremove_label()
@@ -290,7 +305,6 @@ class SpruceWindow(Adw.ApplicationWindow):
     # ─────────────── unified cleanup card ───────────────
 
     def _refresh_autoremove_label(self):
-        # This function is now also the callback for the auto-refresh loop.
         if self.timeout_source:
             GLib.source_remove(self.timeout_source)
             self.timeout_source = None
@@ -316,7 +330,6 @@ class SpruceWindow(Adw.ApplicationWindow):
             if all_pkgs:
                 self.pkg_list.set_text(" | ".join(all_pkgs))
                 self.remove_btn.set_sensitive(True)
-                # If there are still packages, schedule another refresh in 2 seconds.
                 self.timeout_source = GLib.timeout_add_seconds(2, self._refresh_autoremove_label)
             else:
                 self.pkg_list.set_text("No packages or unused Flatpak runtimes available to remove.")
@@ -325,7 +338,6 @@ class SpruceWindow(Adw.ApplicationWindow):
         return GLib.SOURCE_REMOVE
 
     def _on_remove_clicked(self, _btn):
-        # This function now handles both apt and Flatpak removal with a single call.
         if IS_FLATPAK:
             run_flatpak_autoremove_async(self._refresh_autoremove_label)
         else:
@@ -334,13 +346,10 @@ class SpruceWindow(Adw.ApplicationWindow):
     # ─────────────── clear temp / options ───────────────
 
     def _on_clear_clicked(self, _btn):
-        # We start the file scan in a new thread only if the "sweep" option is on.
         if self._opts["sweep"]:
-            # Store a reference to the toast so we can close it later
             self._current_toast = self._toast("Scanning cache directories...")
             GLib.Thread.new("cache_scanner", self._scan_cache_in_thread)
         else:
-            # If sweep is off, just perform the instant clears on the main thread.
             removed = self._perform_instant_clears()
             if removed:
                 self._toast("Selected caches cleared")
@@ -399,15 +408,11 @@ class SpruceWindow(Adw.ApplicationWindow):
                     lambda r, *_: self._opts.__setitem__("sweep", r.get_active()))
         g2.add(row)
 
-        # Headerbar
         hb = Adw.HeaderBar()
-
-        # Build container ONCE to avoid double-parent warnings
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         box.append(hb)
         box.append(page)
         win.set_content(box)
-
         win.present()
 
     # ─────────────── cache sweep dialog ───────────────
@@ -420,18 +425,15 @@ class SpruceWindow(Adw.ApplicationWindow):
         roots: list[tuple[Path, bool]] = []
         unique_paths = set()
 
-        # Add the main cache directory
         main_cache = xdg_cache()
         if main_cache.is_dir():
             unique_paths.add(main_cache)
 
         if IS_FLATPAK:
-            # Check for the host's cache directory (for Flatpak version)
             host_cache = _host_view(Path.home()) / ".cache"
             if host_cache.is_dir():
                 unique_paths.add(host_cache)
 
-            # Add cache directories for other Flatpak apps
             flatpak_app_dir = Path.home() / ".var" / "app"
             if flatpak_app_dir.is_dir():
                 for app_dir in flatpak_app_dir.iterdir():
@@ -439,25 +441,18 @@ class SpruceWindow(Adw.ApplicationWindow):
                     if app_cache_dir.is_dir():
                         unique_paths.add(app_cache_dir)
 
-        # Now convert the set of unique paths into the desired list format
         for p in unique_paths:
             can_write = os.access(p, os.W_OK | os.X_OK)
             roots.append((p, bool(can_write)))
 
         return roots
 
-    # This is the corrected method. It no longer takes the `_thread` parameter.
     def _scan_cache_in_thread(self):
-        """
-        Scan cache directories for large files and pass the results to the UI thread.
-        This function runs in a background thread and does not block the UI.
-        """
         entries: list[tuple[Path, int, bool]] = []
         for root, can_delete in self._cache_roots():
             try:
                 for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
                     try:
-                        # The slow, blocking work is now done here, in the background.
                         size = dir_size(child)
                         entries.append((child, size, can_delete))
                     except Exception:
@@ -465,24 +460,17 @@ class SpruceWindow(Adw.ApplicationWindow):
             except Exception:
                 pass
 
-        # When done, pass the results back to the main thread to show the dialog.
         GLib.idle_add(self._show_sweep_dialog, entries)
-        # Note: The return value of a thread worker function is generally ignored.
         return None
 
     def _show_sweep_dialog(self, entries):
-        """
-        This function is now responsible for building and displaying the dialog
-        once the file scanning is complete. It is called from the main thread.
-        """
-        # Close the "Scanning..." toast message
         if self._current_toast:
             self._current_toast.close()
             self._current_toast = None
 
         dlg = Adw.Dialog.new()
         dlg.set_title("Cache sweep")
-        dlg.present(self) # attach to parent before sizing/content
+        dlg.present(self)
         dlg.set_content_width(720)
         dlg.set_content_height(520)
 
@@ -494,11 +482,6 @@ class SpruceWindow(Adw.ApplicationWindow):
         v.set_margin_start(12)
         v.set_margin_end(12)
 
-
-        base_lines = []
-        for root, can_delete in self._cache_roots():
-            tag = "(sandbox)" if root == xdg_cache() else ("(read-only)" if not can_delete else "")
-            base_lines.append(f"{root} {tag}".rstrip())
         title = Gtk.Label(label="Select the cache files to remove:", xalign=0)
         title.add_css_class("title-4")
         v.append(title)
@@ -633,7 +616,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         cr.move_to(cx - tw / 2, cy - th / 2)
         PangoCairo.show_layout(cr, layout)
 
-        # Rim labels with clamping inside the frame
+        # Rim labels
         def rim_label(angle_mid, text, color_hex):
             set_hex(color_hex)
             sx = cx + math.cos(angle_mid) * (r - 6)
