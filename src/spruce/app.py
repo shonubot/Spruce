@@ -599,8 +599,13 @@ class SpruceWindow(Adw.ApplicationWindow):
             cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, alpha)
 
         pad = 24
-        size = max(0, min(w, h) - pad * 2)
+        # Calculate available space for percentage text on the right
+        chart_space_w = w * 0.6  # Give the chart 60% of the width
+        text_space_w = w * 0.4  # Give the text 40% of the width
+        size = max(0, min(chart_space_w, h) - pad * 2)
         r = size / 2
+        
+        # Position the pie chart on the left side
         cx, cy = pad + r, pad + r
 
         # Background ring
@@ -624,10 +629,22 @@ class SpruceWindow(Adw.ApplicationWindow):
         cr.close_path()
         cr.fill()
 
-        # Center percentage text - moved to the rim to show used percentage
+        # Percentage text
         pct = int(round(frac_used * 100))
+        pct_str = f"{pct}%"
+        layout_pct = PangoCairo.create_layout(cr)
+        layout_pct.set_text(pct_str)
+        layout_pct.set_font_description(Pango.FontDescription("Cantarell 36 bold"))
+        tw_pct, th_pct = layout_pct.get_pixel_size()
+        set_hex(col_used)
+        
+        # Position the percentage text on the right, centered vertically
+        text_x = chart_space_w + (text_space_w - tw_pct) / 2
+        text_y = (h - th_pct) / 2
+        cr.move_to(text_x, text_y)
+        PangoCairo.show_layout(cr, layout_pct)
 
-        # Rim labels with clamping inside the frame
+        # Rim labels
         def rim_label(angle_mid, text, color_hex):
             set_hex(color_hex)
             sx = cx + math.cos(angle_mid) * (r - 6)
@@ -644,16 +661,17 @@ class SpruceWindow(Adw.ApplicationWindow):
             layout.set_font_description(Pango.FontDescription("Cantarell 12"))
             tw, th = layout.get_pixel_size()
 
-            tx = max(pad, min(w - pad - tw, ex + (8 if math.cos(angle_mid) >= 0 else -tw - 8)))
+            tx = max(pad, min(chart_space_w - pad - tw, ex + (8 if math.cos(angle_mid) >= 0 else -tw - 8)))
             ty = max(pad, min(h - pad - th, ey - th / 2))
             set_hex("#e8f3ff" if color_hex == col_used else "#defcee")
             cr.move_to(tx, ty)
             PangoCairo.show_layout(cr, layout)
 
+        # The rim labels now just show the size and description
         used_mid = start + used_ang / 2 if used_ang > 0 else start
         free_mid = start + used_ang + (2 * math.pi - used_ang) / 2
 
-        rim_label(used_mid, f"{pct}% used — {human_size(used)}", col_used)
+        rim_label(used_mid, f"Used — {human_size(used)}", col_used)
         rim_label(free_mid, f"Free — {human_size(free)}", col_free)
 
     # ─────────────── small UI helpers ───────────────
