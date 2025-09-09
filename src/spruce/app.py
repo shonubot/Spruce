@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import re
 import math
 import shutil
 import subprocess
@@ -27,6 +28,7 @@ except Exception:
 
 APP_ID = "io.github.shonubot.Spruce"
 IS_FLATPAK = os.environ.get("FLATPAK_ID") == APP_ID
+SPRUCE_DEBUG = os.environ.get("SPRUCE_DEBUG") == "1"
 
 
 # ─────────────────────────── helpers ─────────────────────────
@@ -37,8 +39,9 @@ def _find_ui() -> str:
     candidates = [
         here.parent.parent / "ui" / "window.ui",                              # repo: src/spruce -> ../../ui/window.ui
         Path.cwd() / "ui" / "window.ui",                                      # running from repo root
-        Path("/app/share/io.github.shonubot.Spruce/ui/window.ui"),            # Flatpak (recommended install path)
+        Path("/app/share/io.github.shonubot.Spruce/ui/window.ui"),            # recommended in Flatpak
         Path("/app/share/spruce/ui/window.ui"),
+        Path("/app/ui/window.ui"),                                            # your manifest variant
     ]
     for p in candidates:
         if p.exists():
@@ -57,10 +60,7 @@ def human_size(n: int) -> str:
 
 
 def _gio_fs_usage(path: Path) -> Tuple[int, int, int] | None:
-    """
-    Try to read filesystem totals (size, free) using GIO. Returns (total, used, free)
-    or None if the query fails.
-    """
+    """Read filesystem totals (size, free) using GIO. Returns (total, used, free)."""
     try:
         gfile = Gio.File.new_for_path(str(path))
         info = gfile.query_filesystem_info("filesystem::size,filesystem::free", None)
@@ -77,7 +77,7 @@ def _gio_fs_usage(path: Path) -> Tuple[int, int, int] | None:
 def _host_view(path: Path) -> Path:
     """
     In Flatpak, map a path to the host filesystem when possible
-    (e.g. /home/USER -> /run/host/home/USER) so disk stats are correct.
+    (/home/USER -> /run/host/home/USER) so disk stats are correct.
     """
     if not IS_FLATPAK:
         return path
@@ -94,9 +94,9 @@ def _host_view(path: Path) -> Path:
 def disk_usage_home() -> Tuple[int, int, int]:
     """
     Correct disk stats even in a Flatpak sandbox.
-    Order of preference:
+    Preference:
       1) /run/host/home/$USER
-      2) /run/host (host root)
+      2) /run/host
       3) sandbox home (~/.var/app/<app>)
     """
     candidates: list[Path] = []
@@ -128,97 +128,197 @@ def xdg_cache() -> Path:
     return Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
 
 
-def _is_flatpak() -> bool:
-    return IS_FLATPAK
-
-
 def _host_flatpak_cmd(*args: str) -> list[str]:
-    """
-    Use host flatpak when sandboxed; otherwise normal flatpak.
-    """
+    """Use host flatpak when sandboxed; otherwise normal flatpak."""
     return (["flatpak-spawn", "--host", "flatpak", *args]
-            if _is_flatpak() else ["flatpak", *args])
+            if IS_FLATPAK else ["flatpak", *args])
 
 
-# ─────────────────── package / cleanup helpers ───────────────────
-
-def list_apt_autoremove() -> List[str]:
-    """Host-only: parse apt-get --dry-run autoremove for packages."""
+def _spawn_capture(cmd: list[str]) -> tuple[int, str, str]:
+    """Run a command; return (exit_code, stdout, stderr)."""
     try:
-        out = subprocess.check_output(
-            ["bash", "-lc", r"apt-get --dry-run autoremove | grep -Po '^Remv \K[^ ]+'"],
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-        return [ln.strip() for ln in out.splitlines() if ln.strip()]
-    except Exception:
-        return []
-
-
-def _flatpak_dryrun_refs(scope: str) -> list[str]:
-    """
-    Return list of refs from a dry-run uninstall in the given scope ('--user' or '--system').
-    Works without pkexec; it's read-only.
-    """
-    cmd = _host_flatpak_cmd("uninstall", "--unused", "--dry-run", scope, "--columns=ref")
-    try:
-        _res, out, _err, _st = GLib.spawn_sync(
+        ok, out, err, status = GLib.spawn_sync(
             None, cmd, None,
-            GLib.SpawnFlags.SEARCH_PATH | GLib.SpawnFlags.STDOUT_TO_PIPE,
+            GLib.SpawnFlags.SEARCH_PATH | GLib.SpawnFlags.STDOUT_TO_PIPE | GLib.SpawnFlags.STDERR_TO_PIPE,
             None
         )
-        if not out:
-            return []
-        lines = out.decode("utf-8", "replace").strip().splitlines()
-        return [ln.strip() for ln in lines if ln and not ln.lower().startswith("ref")]
-    except Exception:
-        return []
+        code = int(status) if isinstance(status, int) else 0
+        return code, (out or b"").decode("utf-8", "replace"), (err or b"").decode("utf-8", "replace")
+    except Exception as e:
+        return 127, "", str(e)
 
 
-def list_flatpak_unused() -> list[str]:
+# ─────────────────── Flatpak: list/compute unused (safe) ───────────────────
+
+# Matches full refs like runtime/org.freedesktop.Platform/x86_64/24.08
+_REF_RE = re.compile(r"\b(?:app|runtime)/[^/\s]+/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+\b")
+
+# Extracts the 'Runtime:' line from `flatpak info APP`
+_RUNTIME_LINE = re.compile(r"^Runtime:\s*(.+?)\s*$", re.IGNORECASE)
+
+# Extracts the app-id from a `flatpak list --app` line (first token)
+_APP_ID_TOKEN = re.compile(r"^[A-Za-z0-9_.-]+(?:\.[A-Za-z0-9_.-]+)+$")
+
+
+def _list_apps(scope_flag: str) -> list[str]:
+    """Return app IDs installed in a given scope."""
+    cmd = _host_flatpak_cmd("list", "--app", scope_flag)
+    code, out, err = _spawn_capture(cmd)
+    text = out if code == 0 else err
+    apps: list[str] = []
+    for ln in text.splitlines():
+        tok = ln.strip().split()
+        if not tok:
+            continue
+        if _APP_ID_TOKEN.match(tok[0]):
+            apps.append(tok[0])
+    return apps
+
+
+def _runtime_of_app(app_id: str, scope_flag: str) -> str | None:
     """
-    Detect unused runtimes/extensions in both user and system installations.
-    Returns refs like id/arch/branch. No privileges needed (dry-run).
+    Return runtime ref (prefixed with 'runtime/') for an app, e.g.:
+      runtime/org.gnome.Platform/x86_64/48
     """
-    refs = []
-    refs.extend(_flatpak_dryrun_refs("--user"))
-    refs.extend(_flatpak_dryrun_refs("--system"))
-    # De-dup while preserving order
+    cmd = _host_flatpak_cmd("info", app_id, scope_flag)
+    code, out, err = _spawn_capture(cmd)
+    text = out if code == 0 else err
+    for ln in text.splitlines():
+        m = _Runtime_LINE_match(ln)
+        if m:
+            ref = m.group(1).strip()
+            if not ref.startswith("runtime/"):
+                ref = f"runtime/{ref}"
+            return ref
+    return None
+
+
+def _Runtime_LINE_match(line: str):
+    return _RUNTIME_LINE.match(line)
+
+
+def _used_runtime_refs(scope_flag: str) -> set[str]:
+    """Set of runtime refs actually referenced by installed apps in this scope."""
+    used: set[str] = set()
+    for app in _list_apps(scope_flag):
+        r = _runtime_of_app(app, scope_flag)
+        if r:
+            used.add(r)
+    return used
+
+
+def _list_installed_runtimes(scope_flag: str) -> list[str]:
+    """All installed runtime refs in this scope (including extensions)."""
+    cmd = _host_flatpak_cmd("list", "--runtime", scope_flag)
+    code, out, err = _spawn_capture(cmd)
+    text = out if code == 0 else err
+    refs: list[str] = []
+    for ln in text.splitlines():
+        for m in _REF_RE.finditer(ln):
+            if m.group(0).startswith("runtime/"):
+                refs.append(m.group(0))
+    return refs
+
+
+def _base_of_runtime_ref(ref: str) -> tuple[str, str, str]:
+    # runtime/org.freedesktop.Platform/x86_64/24.08 -> (org.freedesktop.Platform, x86_64, 24.08)
+    parts = ref.split("/", 4)
+    if len(parts) >= 4:
+        return parts[1], parts[2], parts[3]
+    return ref, "", ""
+
+
+def _is_base_runtime(ref: str) -> bool:
+    """
+    Base runtimes look like runtime/org.gnome.Platform/arch/branch.
+    Extensions usually have extra dotted suffixes (e.g. .ffmpeg-full, .Locale).
+    """
+    name, _arch, _branch = _base_of_runtime_ref(ref)
+    # Heuristic: consider *.Locale and *.Debug as extensions; base has 3 dotted components
+    if name.endswith(".Locale") or name.endswith(".Debug"):
+        return False
+    return name.count(".") >= 2 and not any(seg in name for seg in ("Locale", "Debug"))
+
+
+def _platform_base_from_extension(ref: str) -> str:
+    """
+    Map runtime/org.freedesktop.Platform.ffmpeg-full/x86_64/24.08 -> org.freedesktop.Platform
+    Heuristic: take the first three dotted components.
+    """
+    name, _arch, _branch = _base_of_runtime_ref(ref)
+    parts = name.split(".")
+    if len(parts) >= 3:
+        return ".".join(parts[:3])
+    return name
+
+
+def _unused_refs_for_scope(scope_flag: str) -> list[str]:
+    """
+    Unused = installed runtimes/extensions that no installed app's runtime references.
+    We compare by base platform (org.gnome.Platform, org.freedesktop.Platform, etc.).
+    """
+    used_bases = {_base_of_runtime_ref(r)[0] for r in _used_runtime_refs(scope_flag)}
+    installed = _list_installed_runtimes(scope_flag)
+
+    unused: list[str] = []
+    for ref in installed:
+        name, _arch, _branch = _base_of_runtime_ref(ref)
+        if _is_base_runtime(ref):
+            if name not in used_bases:
+                unused.append(ref)
+        else:
+            plat = _platform_base_from_extension(ref)
+            if plat not in used_bases:
+                unused.append(ref)
+
+    # de-dup preserve order
     seen, out = set(), []
-    for r in refs:
+    for r in unused:
         if r not in seen:
             seen.add(r)
             out.append(r)
     return out
 
 
-def run_combined_autoremove_async(on_done) -> None:
-    """
-    Outside Flatpak: remove both apt and system flatpak unused (requires polkit).
-    """
-    cmd = "apt autoremove -y; flatpak uninstall --unused --system -y"
+def list_flatpak_unused() -> list[str]:
+    """List unused runtimes/extensions across user + system installations."""
+    refs: list[str] = []
+    for scope in ("--user", "--system"):
+        refs.extend(_unused_refs_for_scope(scope))
+    # de-dup
+    seen, out = set(), []
+    for r in refs:
+        if r not in seen:
+            seen.add(r)
+            out.append(r)
+    if SPRUCE_DEBUG:
+        _debug_note(f"unused refs: {out}")
+    return out
+
+
+def _debug_note(s: str):
+    if not SPRUCE_DEBUG:
+        return
     try:
-        pid, _, _ = GLib.spawn_async(
-            ["pkexec", "sh", "-c", cmd],
-            flags=GLib.SpawnFlags.SEARCH_PATH,
-        )
-
-        def _after(_pid, _cond):
-            GLib.timeout_add_seconds(2, on_done)
-
-        GLib.child_watch_add(GLib.PRIORITY_DEFAULT, pid, _after)
+        app = Gtk.Application.get_default()
+        if app and app.props.active_window and hasattr(app.props.active_window, "pkg_list"):
+            lbl = app.props.active_window.pkg_list
+            old = lbl.get_text() or ""
+            lbl.set_text((old + "\n" if old else "") + s)
     except Exception:
-        GLib.timeout_add_seconds(2, on_done)
+        pass
 
+
+# ─────────────────── removal (user first, then system) ───────────────────
 
 def run_flatpak_autoremove_async(on_done) -> None:
     """
-    Perform the actual Flatpak removal:
-      - user scope: no elevation needed
-      - system scope: run host flatpak; polkit may prompt if required
+    Removal uses host flatpak:
+      1) user scope (no elevation)
+      2) system scope (polkit may prompt)
     """
     user_cmd = _host_flatpak_cmd("uninstall", "--unused", "--user", "-y")
-    sys_cmd = _host_flatpak_cmd("uninstall", "--unused", "--system", "-y")
+    sys_cmd  = _host_flatpak_cmd("uninstall", "--unused", "--system", "-y")
 
     def _spawn(cmd):
         try:
@@ -241,6 +341,8 @@ def run_flatpak_autoremove_async(on_done) -> None:
     else:
         after_user(None, None)
 
+
+# ─────────────────────── file utilities ───────────────────────
 
 def dir_size(path: Path) -> int:
     total = 0
@@ -309,39 +411,18 @@ class SpruceWindow(Adw.ApplicationWindow):
             GLib.source_remove(self.timeout_source)
             self.timeout_source = None
 
-        if IS_FLATPAK:
-            pkgs = list_flatpak_unused()
-            if pkgs:
-                self.pkg_list.set_text(" ".join(pkgs))
-                self.remove_btn.set_sensitive(True)
-            else:
-                self.pkg_list.set_text("No unused runtimes or extensions to remove.")
-                self.remove_btn.set_sensitive(False)
+        pkgs = list_flatpak_unused()
+        if pkgs:
+            self.pkg_list.set_text(" ".join(pkgs))
+            self.remove_btn.set_sensitive(True)
         else:
-            apt_pkgs = list_apt_autoremove()
-            flatpak_pkgs = list_flatpak_unused()
-
-            all_pkgs = []
-            if apt_pkgs:
-                all_pkgs.append("APT: " + " ".join(apt_pkgs))
-            if flatpak_pkgs:
-                all_pkgs.append("Flatpak: " + " ".join(flatpak_pkgs))
-
-            if all_pkgs:
-                self.pkg_list.set_text(" | ".join(all_pkgs))
-                self.remove_btn.set_sensitive(True)
-                self.timeout_source = GLib.timeout_add_seconds(2, self._refresh_autoremove_label)
-            else:
-                self.pkg_list.set_text("No packages or unused Flatpak runtimes available to remove.")
-                self.remove_btn.set_sensitive(False)
+            self.pkg_list.set_text("No unused runtimes or extensions to remove.")
+            self.remove_btn.set_sensitive(False)
 
         return GLib.SOURCE_REMOVE
 
     def _on_remove_clicked(self, _btn):
-        if IS_FLATPAK:
-            run_flatpak_autoremove_async(self._refresh_autoremove_label)
-        else:
-            run_combined_autoremove_async(self._refresh_autoremove_label)
+        run_flatpak_autoremove_async(self._refresh_autoremove_label)
 
     # ─────────────── clear temp / options ───────────────
 
