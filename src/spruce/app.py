@@ -598,18 +598,10 @@ class SpruceWindow(Adw.ApplicationWindow):
             rgba.parse(hexcol)
             cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, alpha)
 
-        pad = 24
-        # Calculate available space for percentage text on the right
-        chart_space_w = w * 0.6  # Give the chart 60% of the width
-        text_space_w = w * 0.4  # Give the text 40% of the width
-        
-        # Calculate radius based on the smaller of the chart space dimensions
-        size = min(chart_space_w, h) - (2 * pad)
+        # Position the chart
+        size = min(w, h) - 48
         r = size / 2
-        
-        # Position the pie chart on the left side, centered vertically
-        cx = pad + r
-        cy = h / 2
+        cx, cy = w / 2, h / 2
 
         # Background ring
         set_hex(col_bg)
@@ -640,11 +632,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         layout_pct.set_font_description(Pango.FontDescription("Cantarell 36 bold"))
         tw_pct, th_pct = layout_pct.get_pixel_size()
         set_hex(col_used)
-        
-        # Position the percentage text on the right, centered vertically
-        text_x = chart_space_w + (text_space_w - tw_pct) / 2
-        text_y = (h - th_pct) / 2
-        cr.move_to(text_x, text_y)
+        cr.move_to(cx - tw_pct / 2, cy - th_pct / 2)
         PangoCairo.show_layout(cr, layout_pct)
 
         # Rim labels
@@ -663,15 +651,8 @@ class SpruceWindow(Adw.ApplicationWindow):
             layout.set_text(text)
             layout.set_font_description(Pango.FontDescription("Cantarell 12"))
             tw, th = layout.get_pixel_size()
-
-            # Adjust text positioning based on the angle and the chart's new position
             tx = ex + 8 if math.cos(angle_mid) >= 0 else ex - tw - 8
             ty = ey - th / 2
-            
-            # Clamp the position to prevent it from going out of bounds
-            tx = max(pad, min(w - pad - tw, tx))
-            ty = max(pad, min(h - pad - th, ty))
-
             set_hex("#e8f3ff" if color_hex == col_used else "#defcee")
             cr.move_to(tx, ty)
             PangoCairo.show_layout(cr, layout)
