@@ -33,10 +33,11 @@ SPRUCE_DEBUG = os.environ.get("SPRUCE_DEBUG") == "1"
 # ─────────────────────────── helpers ─────────────────────────
 
 def _find_ui() -> str:
+    """Locate ui/window.ui both in dev trees and in Flatpak installs."""
     here = Path(__file__).resolve()
     candidates = [
-        here.parent.parent / "ui" / "window.ui",
-        Path.cwd() / "ui" / "window.ui",
+        here.parent.parent / "ui" / "window.ui",               # repo: src/spruce -> ../../ui/window.ui
+        Path.cwd() / "ui" / "window.ui",                       # running from repo root
         Path("/app/share/io.github.shonubot.Spruce/ui/window.ui"),
         Path("/app/share/spruce/ui/window.ui"),
         Path("/app/ui/window.ui"),
@@ -58,6 +59,7 @@ def human_size(n: int) -> str:
 
 
 def _gio_fs_usage(path: Path) -> Tuple[int, int, int] | None:
+    """Read filesystem totals (size, free) via GIO. Returns (total, used, free)."""
     try:
         gfile = Gio.File.new_for_path(str(path))
         info = gfile.query_filesystem_info("filesystem::size,filesystem::free", None)
@@ -72,6 +74,7 @@ def _gio_fs_usage(path: Path) -> Tuple[int, int, int] | None:
 
 
 def _host_view(path: Path) -> Path:
+    """Map a path to host (/run/host/…) when sandboxed so disk stats are correct."""
     if not IS_FLATPAK:
         return path
     try:
@@ -85,10 +88,12 @@ def _host_view(path: Path) -> Path:
 
 
 def disk_usage_home() -> Tuple[int, int, int]:
+    """Disk stats with fallbacks: host home → host root → sandbox home."""
     candidates: list[Path] = []
     if IS_FLATPAK:
         candidates += [_host_view(Path.home()), Path("/run/host")]
     candidates.append(Path.home())
+
     for p in candidates:
         ans = _gio_fs_usage(p)
         if ans:
@@ -108,11 +113,13 @@ def xdg_cache() -> Path:
 
 
 def _host_flatpak_cmd(*args: str) -> list[str]:
+    """Use host flatpak when sandboxed; otherwise normal flatpak."""
     return (["flatpak-spawn", "--host", "flatpak", *args]
             if IS_FLATPAK else ["flatpak", *args])
 
 
 def _spawn_capture(cmd: list[str]) -> tuple[int, str, str]:
+    """Run a command; return (exit_code, stdout, stderr)."""
     try:
         ok, out, err, status = GLib.spawn_sync(
             None, cmd, None,
@@ -138,12 +145,13 @@ def _debug_note(s: str):
         pass
 
 
-# ────────── Flatpak detection (new + robust legacy fallback) ──────────
+# ────────── Flatpak: detection that works on old/new versions ──────────
 
 _RUNTIME_LINE = re.compile(r"^Runtime:\s*(.+?)\s*$", re.IGNORECASE)
 _APP_ID_TOKEN = re.compile(r"^[A-Za-z0-9_.-]+(?:\.[A-Za-z0-9_.-]+)+$")
 
 def _list_apps(scope_flag: str) -> list[str]:
+    """Return app IDs installed in a given scope."""
     cmd = _host_flatpak_cmd("list", "--app", scope_flag)
     code, out, err = _spawn_capture(cmd)
     text = out if code == 0 else err
@@ -152,11 +160,13 @@ def _list_apps(scope_flag: str) -> list[str]:
         tok = ln.strip().split()
         if tok and _APP_ID_TOKEN.match(tok[0]):
             apps.append(tok[0])
-    if SPRUCE_DEBUG: _debug_note(f"{scope_flag} apps: {apps}")
+    if SPRUCE_DEBUG:
+        _debug_note(f"{scope_flag} apps: {apps}")
     return apps
 
 
 def _runtime_of_app(app_id: str, scope_flag: str) -> str | None:
+    """Return runtime ref (prefixed with 'runtime/') for an app."""
     cmd = _host_flatpak_cmd("info", app_id, scope_flag)
     code, out, err = _spawn_capture(cmd)
     text = out if code == 0 else err
@@ -171,75 +181,66 @@ def _runtime_of_app(app_id: str, scope_flag: str) -> str | None:
 
 
 def _used_runtime_refs(scope_flag: str) -> set[str]:
+    """Set of runtime refs actually referenced by installed apps in this scope."""
     used: set[str] = set()
     for app in _list_apps(scope_flag):
         r = _runtime_of_app(app, scope_flag)
         if r:
             used.add(r)
-    if SPRUCE_DEBUG: _debug_note(f"{scope_flag} used runtimes: {sorted(used)}")
+    if SPRUCE_DEBUG:
+        _debug_note(f"{scope_flag} used runtimes: {sorted(used)}")
     return used
 
 
-def _list_installed_runtime_refs_via_columns(scope_flag: str) -> list[str]:
-    """Try modern way: flatpak list --runtime --columns=ref (if supported)."""
-    cmd = _host_flatpak_cmd("list", "--runtime", scope_flag, "--columns=ref")
-    code, out, err = _spawn_capture(cmd)
-    if code != 0 or not out.strip() or "Unknown option" in err:
-        return []
-    refs = []
-    for ln in out.splitlines():
-        s = ln.strip()
-        if s.startswith(("app/", "runtime/")):
-            refs.append(s)
-    return refs
-
-
 def _list_installed_runtime_refs_via_fs(scope_flag: str) -> list[str]:
-    """Legacy fallback: read refs from the host filesystem layout."""
-    roots = []
+    """
+    Enumerate installed runtime *refs* by reading the HOST filesystem layout.
+    Robust across Flatpak versions and avoids truncated table output.
+    """
     if scope_flag == "--user":
-        roots.append(_host_view(Path.home()) / ".local/share/flatpak/runtime")
+        root = _host_view(Path.home()) / ".local/share/flatpak/runtime"
     else:
-        roots.append(_host_view(Path("/var/lib/flatpak/runtime")))
+        root = _host_view(Path("/var/lib/flatpak/runtime"))
+
     refs: list[str] = []
-    for root in roots:
-        try:
-            if not root.is_dir():
-                continue
-            for rid in sorted(p.name for p in root.iterdir() if p.is_dir()):
-                rid_dir = root / rid
-                for arch_dir in rid_dir.iterdir():
-                    if not arch_dir.is_dir():
-                        continue
+    try:
+        if root.is_dir():
+            for rid_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+                rid = rid_dir.name
+                for arch_dir in sorted(p for p in rid_dir.iterdir() if p.is_dir()):
                     arch = arch_dir.name
-                    for branch_dir in arch_dir.iterdir():
-                        if not branch_dir.is_dir():
-                            continue
+                    for branch_dir in sorted(p for p in arch_dir.iterdir() if p.is_dir()):
                         branch = branch_dir.name
-                        refs.append(f"runtime/{rid}/{arch}/{branch}")
-        except Exception:
-            continue
-    if SPRUCE_DEBUG: _debug_note(f"{scope_flag} refs via FS: {refs}")
+                        # Only record refs that have at least one deployed commit dir inside
+                        has_commit = any(d.is_dir() for d in branch_dir.iterdir())
+                        if has_commit:
+                            refs.append(f"runtime/{rid}/{arch}/{branch}")
+    except Exception:
+        pass
+
+    if SPRUCE_DEBUG:
+        _debug_note(f"{scope_flag} refs via FS: {refs}")
     return refs
 
 
 def _list_installed_runtime_refs(scope_flag: str) -> list[str]:
-    refs = _list_installed_runtime_refs_via_columns(scope_flag)
-    if refs:
-        if SPRUCE_DEBUG: _debug_note(f"{scope_flag} refs via columns: {refs}")
-        return refs
-    # Fallback: filesystem enumeration (robust on old Flatpak)
+    # Always use the filesystem enumerator for reliability
     return _list_installed_runtime_refs_via_fs(scope_flag)
 
 
 def _base_of_runtime_ref(ref: str) -> tuple[str, str, str]:
+    # runtime/org.freedesktop.Platform/x86_64/24.08 -> (org.freedesktop.Platform, x86_64, 24.08)
     parts = ref.split("/", 4)
     if len(parts) >= 4:
-        return parts[1], parts[2], parts[3]  # (name, arch, branch)
+        return parts[1], parts[2], parts[3]
     return ref, "", ""
 
 
 def _is_base_runtime(ref: str) -> bool:
+    """
+    Base runtimes look like runtime/org.gnome.Platform/arch/branch.
+    Treat *.Locale and *.Debug as extensions.
+    """
     name, _arch, _branch = _base_of_runtime_ref(ref)
     if name.endswith(".Locale") or name.endswith(".Debug"):
         return False
@@ -247,19 +248,29 @@ def _is_base_runtime(ref: str) -> bool:
 
 
 def _platform_base_from_extension(ref: str) -> str:
+    """
+    Map runtime/org.freedesktop.Platform.ffmpeg-full/x86_64/24.08 -> org.freedesktop.Platform
+    Heuristic: first three dotted components.
+    """
     name, _arch, _branch = _base_of_runtime_ref(ref)
     parts = name.split(".")
     return ".".join(parts[:3]) if len(parts) >= 3 else name
 
 
 def _unused_refs_for_scope(scope_flag: str) -> list[str]:
+    """
+    Flatpak-like logic:
+      - If there are **no apps installed** in this scope → consider **all installed
+        runtime/extension refs** unused (pins/permissions are enforced at uninstall time).
+      - Else → consider a ref unused if its base platform isn't among the runtimes
+        actually referenced by any installed app.
+    """
     installed = _list_installed_runtime_refs(scope_flag)
     apps = _list_apps(scope_flag)
 
-    # Match Flatpak behavior: if no apps are installed in this scope,
-    # treat ALL installed runtimes/extensions as candidates.
     if not apps:
-        if SPRUCE_DEBUG: _debug_note(f"{scope_flag}: no apps; all installed refs are candidates")
+        if SPRUCE_DEBUG:
+            _debug_note(f"{scope_flag}: no apps; all installed refs are candidates")
         return installed[:]
 
     used_bases = {_base_of_runtime_ref(r)[0] for r in _used_runtime_refs(scope_flag)}
@@ -275,17 +286,19 @@ def _unused_refs_for_scope(scope_flag: str) -> list[str]:
             if plat not in used_bases:
                 unused.append(ref)
 
-    # de-dup preserve order
+    # de-dup while preserving order
     seen, out = set(), []
     for r in unused:
         if r not in seen:
             seen.add(r)
             out.append(r)
-    if SPRUCE_DEBUG: _debug_note(f"{scope_flag} unused refs: {out}")
+    if SPRUCE_DEBUG:
+        _debug_note(f"{scope_flag} unused refs: {out}")
     return out
 
 
 def list_flatpak_unused() -> list[str]:
+    """Unused runtimes/extensions across user + system installations."""
     refs: list[str] = []
     for scope in ("--user", "--system"):
         refs.extend(_unused_refs_for_scope(scope))
@@ -294,13 +307,15 @@ def list_flatpak_unused() -> list[str]:
         if r not in seen:
             seen.add(r)
             out.append(r)
-    if SPRUCE_DEBUG: _debug_note(f"unused refs (merged): {out}")
+    if SPRUCE_DEBUG:
+        _debug_note(f"unused refs (merged): {out}")
     return out
 
 
 # ─────────────────── removal (user first, then system) ───────────────────
 
 def run_flatpak_autoremove_async(on_done) -> None:
+    """Removal via host flatpak. User scope first; system scope next (polkit may prompt)."""
     user_cmd = _host_flatpak_cmd("uninstall", "--unused", "--user", "-y")
     sys_cmd  = _host_flatpak_cmd("uninstall", "--unused", "--system", "-y")
 
@@ -360,27 +375,31 @@ class SpruceWindow(Adw.ApplicationWindow):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
+        # Chart
         self.pie_chart.set_hexpand(True)
         self.pie_chart.set_vexpand(True)
         self.pie_chart.set_content_width(360)
         self.pie_chart.set_content_height(260)
         self.pie_chart.set_draw_func(self._draw_chart, None)
 
+        # Buttons
         self.clear_btn.connect("clicked", self._on_clear_clicked)
         self.options_btn.connect("clicked", self._on_options_clicked)
         self.remove_btn.connect("clicked", self._on_remove_clicked)
         self.timeout_source = None
 
+        # Options state
         self._opts = {
             "thumbs": True,
             "webkit": True,
             "fontconf": True,
             "mesa": True,
-            "sweep": True,
+            "sweep": True,  # enabled by default
         }
 
         self._current_toast = None
 
+        # Initial UI
         self._refresh_autoremove_label()
         self.pie_chart.queue_draw()
 
@@ -476,6 +495,10 @@ class SpruceWindow(Adw.ApplicationWindow):
     # ─────────────── cache sweep dialog ───────────────
 
     def _cache_roots(self) -> list[tuple[Path, bool]]:
+        """
+        Return [(path, can_delete)] roots to list in the sweep dialog.
+        Includes the app cache (writable), the host's cache, and other Flatpak app caches.
+        """
         roots: list[tuple[Path, bool]] = []
         unique_paths = set()
 
@@ -488,9 +511,9 @@ class SpruceWindow(Adw.ApplicationWindow):
             if host_cache.is_dir():
                 unique_paths.add(host_cache)
 
-            fp = Path.home() / ".var" / "app"
-            if fp.is_dir():
-                for app_dir in fp.iterdir():
+            flatpak_app_dir = Path.home() / ".var" / "app"
+            if flatpak_app_dir.is_dir():
+                for app_dir in flatpak_app_dir.iterdir():
                     app_cache_dir = app_dir / "cache"
                     if app_cache_dir.is_dir():
                         unique_paths.add(app_cache_dir)
@@ -498,9 +521,13 @@ class SpruceWindow(Adw.ApplicationWindow):
         for p in unique_paths:
             can_write = os.access(p, os.W_OK | os.X_OK)
             roots.append((p, bool(can_write)))
+
         return roots
 
     def _scan_cache_in_thread(self):
+        """
+        Scan cache directories for large files and pass the results to the UI thread.
+        """
         entries: list[tuple[Path, int, bool]] = []
         for root, can_delete in self._cache_roots():
             try:
@@ -512,24 +539,35 @@ class SpruceWindow(Adw.ApplicationWindow):
                         pass
             except Exception:
                 pass
+
         GLib.idle_add(self._show_sweep_dialog, entries)
         return None
 
     def _show_sweep_dialog(self, entries):
+        """
+        Properly sized cache sweep dialog using Adw.Dialog (not squished).
+        """
         if self._current_toast:
             self._current_toast.close()
             self._current_toast = None
 
-        dlg = Adw.AlertDialog.new("Cache sweep", "Select the cache files to remove:")
-        dlg.set_default_response("cancel")
-        dlg.add_response("cancel", "Cancel")
-        dlg.add_response("remove", "Remove selected")
+        dlg = Adw.Dialog.new()
+        dlg.set_title("Cache sweep")
+        dlg.present(self)  # attach first
+        dlg.set_content_width(720)
+        dlg.set_content_height(520)
+
+        header = Adw.HeaderBar()
 
         v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         v.set_margin_top(12)
         v.set_margin_bottom(12)
         v.set_margin_start(12)
         v.set_margin_end(12)
+
+        title = Gtk.Label(label="Select the cache files to remove:", xalign=0)
+        title.add_css_class("title-4")
+        v.append(title)
 
         sc = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
         listbox = Gtk.ListBox()
@@ -550,11 +588,26 @@ class SpruceWindow(Adw.ApplicationWindow):
             paths.append(p)
             deletable.append(can_delete)
 
-        dlg.set_extra_child(v)
+        actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        sel_all = Gtk.CheckButton(label="Select all")
+        rm_btn = Gtk.Button(label="Remove selected", sensitive=False)
+        actions.append(sel_all)
+        actions.append(rm_btn)
+        v.append(actions)
 
-        def on_response(_d, resp):
-            if resp != "remove":
-                return
+        def update_btn(*_a):
+            rm_btn.set_sensitive(any(s.get_active() and s.get_sensitive() for s in toggles))
+        for s in toggles:
+            s.connect("notify::active", update_btn)
+
+        def _set_all(active: bool):
+            for s in toggles:
+                if s.get_sensitive():
+                    s.set_active(active)
+            update_btn()
+        sel_all.connect("toggled", lambda b: _set_all(b.get_active()))
+
+        def do_rm(_b):
             removed = 0
             for sw, p, can_delete in zip(toggles, paths, deletable):
                 if not can_delete:
@@ -571,9 +624,14 @@ class SpruceWindow(Adw.ApplicationWindow):
             if removed:
                 self._toast(f"Removed {removed} item(s)")
                 self.pie_chart.queue_draw()
+            dlg.close()
 
-        dlg.connect("response", on_response)
-        dlg.present(self)
+        rm_btn.connect("clicked", do_rm)
+
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        body.append(header)
+        body.append(v)
+        dlg.set_child(body)
 
     # ─────────────── pie chart ───────────────
 
