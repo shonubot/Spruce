@@ -9,7 +9,6 @@ import os
 import re
 import math
 import shutil
-import subprocess
 from pathlib import Path
 from typing import List, Tuple
 
@@ -146,15 +145,14 @@ def _debug_note(s: str):
         pass
 
 
-# ────────── Flatpak: detect unused runtimes/extensions (safe on old/new) ──────────
+# ────────── Flatpak: detect unused runtimes/extensions (old/new friendly) ──────────
 
 # Regexes for parsing
-_REF_RE = re.compile(r"\b(?:app|runtime)/[^/\s]+/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+\b")
 _RUNTIME_LINE = re.compile(r"^Runtime:\s*(.+?)\s*$", re.IGNORECASE)
 _APP_ID_TOKEN = re.compile(r"^[A-Za-z0-9_.-]+(?:\.[A-Za-z0-9_.-]+)+$")  # reverse-DNS ID
-_ID_LINE = _APP_ID_TOKEN  # runtime/extension IDs look the same format
 
 def _list_apps(scope_flag: str) -> list[str]:
+    """Return app IDs installed in a given scope."""
     cmd = _host_flatpak_cmd("list", "--app", scope_flag)
     code, out, err = _spawn_capture(cmd)
     text = out if code == 0 else err
@@ -169,7 +167,7 @@ def _list_apps(scope_flag: str) -> list[str]:
 
 
 def _runtime_of_app(app_id: str, scope_flag: str) -> str | None:
-    # Look for "Runtime: org.gnome.Platform/x86_64/48"
+    """Return runtime ref (prefixed with 'runtime/') for an app."""
     cmd = _host_flatpak_cmd("info", app_id, scope_flag)
     code, out, err = _spawn_capture(cmd)
     text = out if code == 0 else err
@@ -184,6 +182,7 @@ def _runtime_of_app(app_id: str, scope_flag: str) -> str | None:
 
 
 def _used_runtime_refs(scope_flag: str) -> set[str]:
+    """Set of runtime refs actually referenced by installed apps in this scope."""
     used: set[str] = set()
     for app in _list_apps(scope_flag):
         r = _runtime_of_app(app, scope_flag)
@@ -202,7 +201,7 @@ def _list_runtime_ids(scope_flag: str) -> list[str]:
     ids: list[str] = []
     for ln in text.splitlines():
         tok = ln.strip().split()
-        if tok and _ID_LINE.match(tok[0]):
+        if tok and _APP_ID_TOKEN.match(tok[0]):  # same pattern
             ids.append(tok[0])
     if SPRUCE_DEBUG:
         _debug_note(f"{scope_flag} runtime IDs: {ids}")
@@ -242,7 +241,8 @@ def _ref_of_id(rtid: str, scope_flag: str) -> str | None:
     return None
 
 
-def _list_installed_runtimes(scope_flag: str) -> list[str]:
+def _list_installed_runtime_refs(scope_flag: str) -> list[str]:
+    """Full refs for installed runtimes/extensions in this scope."""
     refs: list[str] = []
     for rtid in _list_runtime_ids(scope_flag):
         ref = _ref_of_id(rtid, scope_flag)
@@ -254,13 +254,18 @@ def _list_installed_runtimes(scope_flag: str) -> list[str]:
 
 
 def _base_of_runtime_ref(ref: str) -> tuple[str, str, str]:
+    # runtime/org.freedesktop.Platform/x86_64/24.08 -> (org.freedesktop.Platform, x86_64, 24.08)
     parts = ref.split("/", 4)
     if len(parts) >= 4:
-        return parts[1], parts[2], parts[3]  # (name, arch, branch)
+        return parts[1], parts[2], parts[3]
     return ref, "", ""
 
 
 def _is_base_runtime(ref: str) -> bool:
+    """
+    Base runtimes look like runtime/org.gnome.Platform/arch/branch.
+    Treat *.Locale and *.Debug as extensions.
+    """
     name, _arch, _branch = _base_of_runtime_ref(ref)
     if name.endswith(".Locale") or name.endswith(".Debug"):
         return False
@@ -268,16 +273,35 @@ def _is_base_runtime(ref: str) -> bool:
 
 
 def _platform_base_from_extension(ref: str) -> str:
+    """
+    Map runtime/org.freedesktop.Platform.ffmpeg-full/x86_64/24.08 -> org.freedesktop.Platform
+    Heuristic: first three dotted components.
+    """
     name, _arch, _branch = _base_of_runtime_ref(ref)
     parts = name.split(".")
     if len(parts) >= 3:
-        return ".".join(parts[:3])  # org.freedesktop.Platform
+        return ".".join(parts[:3])
     return name
 
 
 def _unused_refs_for_scope(scope_flag: str) -> list[str]:
+    """
+    Flatpak-like logic:
+      - If there are **no apps installed** in this scope → consider **all installed
+        runtime/extension refs** unused (pins/permissions are enforced at uninstall time).
+      - Else → consider a ref unused if its base platform isn't among the runtimes
+        actually referenced by any installed app.
+    """
+    installed = _list_installed_runtime_refs(scope_flag)
+    apps = _list_apps(scope_flag)
+
+    if not apps:
+        # Match user expectation of `flatpak uninstall --unused` on old versions
+        if SPRUCE_DEBUG:
+            _debug_note(f"{scope_flag} has no apps; ALL runtimes/extensions are candidates")
+        return installed[:]  # everything is a candidate (host will skip pinned)
+
     used_bases = {_base_of_runtime_ref(r)[0] for r in _used_runtime_refs(scope_flag)}
-    installed = _list_installed_runtimes(scope_flag)
 
     unused: list[str] = []
     for ref in installed:
@@ -544,23 +568,17 @@ class SpruceWindow(Adw.ApplicationWindow):
             self._current_toast.close()
             self._current_toast = None
 
-        dlg = Adw.Dialog.new()
-        dlg.set_title("Cache sweep")
-        dlg.present(self)
-        dlg.set_content_width(720)
-        dlg.set_content_height(520)
+        dlg = Adw.AlertDialog.new("Cache sweep", "Select the cache files to remove:")
+        dlg.set_default_response("cancel")
+        dlg.add_response("cancel", "Cancel")
+        dlg.add_response("remove", "Remove selected")
 
-        header = Adw.HeaderBar()
-
+        # Build content
         v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         v.set_margin_top(12)
         v.set_margin_bottom(12)
         v.set_margin_start(12)
         v.set_margin_end(12)
-
-        title = Gtk.Label(label="Select the cache files to remove:", xalign=0)
-        title.add_css_class("title-4")
-        v.append(title)
 
         sc = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
         listbox = Gtk.ListBox()
@@ -581,28 +599,11 @@ class SpruceWindow(Adw.ApplicationWindow):
             paths.append(p)
             deletable.append(can_delete)
 
-        actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        sel_all = Gtk.CheckButton(label="Select all")
-        rm_btn = Gtk.Button(label="Remove selected", sensitive=False)
-        actions.append(sel_all)
-        actions.append(rm_btn)
-        v.append(actions)
+        dlg.set_extra_child(v)
 
-        def update_btn(*_a):
-            rm_btn.set_sensitive(any(s.get_active() and s.get_sensitive() for s in toggles))
-
-        for s in toggles:
-            s.connect("notify::active", update_btn)
-
-        def _set_all(active: bool):
-            for s in toggles:
-                if s.get_sensitive():
-                    s.set_active(active)
-            update_btn()
-
-        sel_all.connect("toggled", lambda b: _set_all(b.get_active()))
-
-        def do_rm(_b):
+        def on_response(_d, resp):
+            if resp != "remove":
+                return
             removed = 0
             for sw, p, can_delete in zip(toggles, paths, deletable):
                 if not can_delete:
@@ -619,14 +620,9 @@ class SpruceWindow(Adw.ApplicationWindow):
             if removed:
                 self._toast(f"Removed {removed} item(s)")
                 self.pie_chart.queue_draw()
-            dlg.close()
 
-        rm_btn.connect("clicked", do_rm)
-
-        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        body.append(header)
-        body.append(v)
-        dlg.set_child(body)
+        dlg.connect("response", on_response)
+        dlg.present(self)
 
     # ─────────────── pie chart ───────────────
 
@@ -716,12 +712,10 @@ class SpruceWindow(Adw.ApplicationWindow):
     # ─────────────── small UI helpers ───────────────
 
     def _toast(self, text: str):
-        dlg = Adw.MessageDialog.new(self)
-        dlg.set_heading("Spruce")
-        dlg.set_body(text)
+        dlg = Adw.AlertDialog.new("Spruce", text)
         dlg.add_response("ok", "OK")
         dlg.set_default_response("ok")
-        dlg.present()
+        dlg.present(self)
         return dlg
 
     def _info(self, text: str):
