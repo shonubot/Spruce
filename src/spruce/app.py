@@ -110,18 +110,15 @@ def _host_sh(script: str) -> tuple[int, str, str]:
     return _spawn_capture(_host_exec("bash", "-lc", script))
 
 
-# ─────────────────── diagnostics that always show in UI ───────────────────
+# ─────────────────── diagnostics shown in UI ───────────────────
 
-def _append_diag(win: Gtk.Widget, lines: list[str]) -> None:
-    # Always attach visible diagnostics in the side pane label
+def _append_diag(win: Gtk.Widget | None, lines: list[str]) -> None:
     try:
         app = Gtk.Application.get_default()
-        if not app:
-            return
-        w = app.props.active_window or win
+        w = (app.props.active_window if app else None) or win  # type: ignore
         if not w or not hasattr(w, "pkg_list"):
             return
-        lbl: Gtk.Label = getattr(w, "pkg_list")
+        lbl: Gtk.Label = getattr(w, "pkg_list")  # type: ignore
         cur = lbl.get_text()
         text = "\n".join(lines)
         lbl.set_text((cur + "\n" if cur else "") + text)
@@ -131,17 +128,32 @@ def _append_diag(win: Gtk.Widget, lines: list[str]) -> None:
 
 # ─────────────────────────── flatpak logic ───────────────────────────
 
-_APP_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+(?:\.[A-Za-z0-9_.-]+)+$")
-_RUNTIME_LINE = re.compile(r"^Runtime:\s*(.+?)\s*$", re.IGNORECASE)
+APP_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+(?:\.[A-Za-z0-9_.-]+)+$")
+RUNTIME_LINE_RE = re.compile(r"^Runtime:\s*(.+?)\s*$", re.IGNORECASE)
 
 def _host_list_apps(scope: str) -> list[str]:
-    code, out, err = _spawn_capture(_host_exec("flatpak", "list", "--app", scope))
-    text = out if code == 0 else err
+    # Try modern columns output first
+    code, out, err = _spawn_capture(_host_exec("flatpak", "list", "--app", scope, "--columns=application"))
     apps: list[str] = []
-    for ln in text.splitlines():
-        tok = ln.strip().split()
-        if tok and _APP_ID_RE.match(tok[0]):
-            apps.append(tok[0])
+    if code == 0 and out.strip():
+        for ln in out.splitlines():
+            app = ln.strip()
+            if APP_ID_RE.match(app):
+                apps.append(app)
+
+    if not apps:
+        # Fallback: parse default table
+        code2, out2, err2 = _spawn_capture(_host_exec("flatpak", "list", "--app", scope))
+        text = out2 if code2 == 0 else err2
+        for ln in text.splitlines():
+            toks = ln.split()
+            for t in toks:
+                if APP_ID_RE.match(t):
+                    apps.append(t)
+                    break
+        if code != 0 and text.strip():
+            _append_diag(None, [f"{scope} list(err): {text.strip()}"])
+
     return apps
 
 
@@ -149,7 +161,7 @@ def _host_runtime_of_app(app_id: str, scope: str) -> str | None:
     code, out, err = _spawn_capture(_host_exec("flatpak", "info", app_id, scope))
     text = out if code == 0 else err
     for ln in text.splitlines():
-        m = __RUNTIME_LINE.match(ln)
+        m = RUNTIME_LINE_RE.match(ln)
         if m:
             r = m.group(1).strip()
             return r if r.startswith("runtime/") else f"runtime/{r}"
@@ -157,35 +169,33 @@ def _host_runtime_of_app(app_id: str, scope: str) -> str | None:
 
 
 def _host_installed_runtime_refs(scope: str) -> list[str]:
-    # Enumerate by filesystem; robust across flatpak versions
+    # POSIX-simple pipelines; no process-substitution; surface stderr on error
     if scope == "--user":
         script = r'''
-roots=()
-[ -n "$HOME" ] && roots+=("$HOME/.local/share/flatpak/runtime")
-[ -n "$USER" ] && roots+=("/var/home/$USER/.local/share/flatpak/runtime")
-seen=""
-for root in "${roots[@]}"; do
-  [ -d "$root" ] || continue
-  while IFS= read -r d; do
-    rid=$(basename "$(dirname "$(dirname "$d")")")
-    arch=$(basename "$(dirname "$d")")
-    br=$(basename "$d")
-    ref="runtime/$rid/$arch/$br"
-    case ":$seen:" in (*":$ref:"*) ;; (*) echo "$ref"; seen="$seen:$ref";; esac
-  done < <(find "$root" -mindepth 3 -maxdepth 3 -type d | sort)
-done
+set -e
+roots=""
+[ -n "$HOME" ] && [ -d "$HOME/.local/share/flatpak/runtime" ] && roots="$roots $HOME/.local/share/flatpak/runtime"
+[ -n "$USER" ] && [ -d "/var/home/$USER/.local/share/flatpak/runtime" ] && roots="$roots /var/home/$USER/.local/share/flatpak/runtime"
+[ -z "$roots" ] && exit 0
+for r in $roots; do
+  [ -d "$r" ] || continue
+  find "$r" -mindepth 3 -maxdepth 3 -type d
+done | sort \
+| awk -F/ 'BEGIN{OFS="/"} {rid=$(NF-2); arch=$(NF-1); br=$NF; print "runtime/"rid"/"arch"/"br}' \
+| awk "!x[$0]++"
 '''
     else:
         script = r'''
-root="/var/lib/flatpak/runtime"
-[ -d "$root" ] || exit 0
-find "$root" -mindepth 3 -maxdepth 3 -type d \
-| sort \
+set -e
+r="/var/lib/flatpak/runtime"
+[ -d "$r" ] || exit 0
+find "$r" -mindepth 3 -maxdepth 3 -type d | sort \
 | awk -F/ 'BEGIN{OFS="/"} {rid=$(NF-2); arch=$(NF-1); br=$NF; print "runtime/"rid"/"arch"/"br}' \
-| uniq
+| awk "!x[$0]++"
 '''
     code, out, err = _host_sh(script)
-    if code != 0 and SPRUCE_DEBUG:
+    if code != 0 and err.strip():
+        _append_diag(None, [f"{scope} refs(err): {err.strip()}"])
         return []
     return [ln.strip() for ln in out.splitlines() if ln.strip().startswith("runtime/")]
 
@@ -199,6 +209,7 @@ def _is_base_runtime(ref: str) -> bool:
     name, _, _ = _base_of(ref)
     if name.endswith(".Locale") or name.endswith(".Debug"):
         return False
+    # Treat GL.default, ffmpeg-full, openh264, codecs as extensions
     if any(name.endswith(s) for s in (".GL.default", ".ffmpeg-full", ".openh264", ".codecs", ".codecs-extra")):
         return False
     return True
@@ -210,60 +221,45 @@ def _platform_from_ext(ref: str) -> str:
     return ".".join(parts[:3]) if len(parts) >= 3 else name
 
 
-def _unused_refs(scope: str, diag: list[str]) -> list[str]:
-    installed = _host_installed_runtime_refs(scope)
-    apps = _host_list_apps(scope)
-
-    diag.append(f"{scope} installed: {len(installed)}")
-    if SPRUCE_DEBUG:
-        diag.append(f"{scope} refs: {installed[:8]}{' …' if len(installed)>8 else ''}")
-        diag.append(f"{scope} apps: {apps}")
-
-    if not installed:
-        return []
-
-    if not apps:
-        diag.append(f"{scope}: no apps — everything is a candidate")
-        return installed[:]
-
-    used_bases = set()
-    for a in apps:
-        r = _host_runtime_of_app(a, scope)
-        if r:
-            used_bases.add(_base_of(r)[0])
-
-    if SPRUCE_DEBUG:
-        diag.append(f"{scope} used bases: {sorted(used_bases)}")
-
-    unused: list[str] = []
-    for ref in installed:
-        name, _, _ = _base_of(ref)
-        if _is_base_runtime(ref):
-            if name not in used_bases:
-                unused.append(ref)
-        else:
-            if _platform_from_ext(ref) not in used_bases:
-                unused.append(ref)
-
-    # de-dup
-    seen, out = set(), []
-    for r in unused:
-        if r not in seen:
-            seen.add(r); out.append(r)
-    diag.append(f"{scope} unused: {out}")
-    return out
-
-
 def list_flatpak_unused_with_diag(win: Gtk.Widget) -> list[str]:
     diag: list[str] = []
-    out: list[str] = []
-    out += _unused_refs("--user", diag)
-    out += _unused_refs("--system", diag)
+    all_refs: list[str] = []
+
+    for scope in ("--user", "--system"):
+        refs = _host_installed_runtime_refs(scope)
+        apps = _host_list_apps(scope)
+        diag.append(f"{scope} installed: {len(refs)}")
+        if SPRUCE_DEBUG:
+            diag.append(f"{scope} refs: {refs}")
+        diag.append(f"{scope} apps: {apps}")
+
+        if not refs:
+            continue
+
+        if not apps:
+            diag.append(f"{scope}: no apps — everything is a candidate")
+            all_refs.extend(refs)
+            continue
+
+        used_bases = set()
+        for a in apps:
+            r = _host_runtime_of_app(a, scope)
+            if r:
+                used_bases.add(_base_of(r)[0])
+        if SPRUCE_DEBUG:
+            diag.append(f"{scope} used bases: {sorted(used_bases)}")
+
+        for ref in refs:
+            base = _base_of(ref)[0] if _is_base_runtime(ref) else _platform_from_ext(ref)
+            if base not in used_bases:
+                all_refs.append(ref)
+
     # de-dup
     seen, uniq = set(), []
-    for r in out:
+    for r in all_refs:
         if r not in seen:
             seen.add(r); uniq.append(r)
+
     diag.append(f"unused refs (merged): {uniq}")
     _append_diag(win, diag)
     return uniq
@@ -314,35 +310,31 @@ def dir_size(path: Path) -> int:
 
 
 def _host_cache_paths_and_sizes() -> list[tuple[str, int]]:
-    script = r'''
+    # List host cache dirs and size them with du -sb (one per path for portability)
+    code, out, err = _host_sh(r'''
 set -e
-out=()
-# Primary host caches
-if [ -d "$HOME/.cache" ]; then out+=("$HOME/.cache"); fi
+paths=""
+[ -d "$HOME/.cache" ] && paths="$paths $HOME/.cache"
 if [ -d "$HOME/.var/app" ]; then
-  while IFS= read -r d; do out+=("$d"); done < <(find "$HOME/.var/app" -mindepth 2 -maxdepth 2 -type d -name cache -print)
+  while IFS= read -r d; do paths="$paths $d"; done <<EOF
+$(find "$HOME/.var/app" -mindepth 2 -maxdepth 2 -type d -name cache -print)
+EOF
 fi
-# Size with du -sb (portable on GNU/busybox)
-for d in "${out[@]}"; do
-  if [ -e "$d" ]; then
-    sz=$(du -sb "$d" 2>/dev/null | awk "{print \$1}")
-    sz=${sz:-0}
-    printf "%s\t%s\n" "$sz" "$d"
-  fi
-done
-'''
-    _code, out, _err = _host_sh(script)
-    res: list[tuple[str, int]] = []
-    for ln in out.splitlines():
-        ln = ln.strip()
-        if not ln:
-            continue
+for p in $paths; do printf "%s\n" "$p"; done
+''')
+    if code != 0 and err.strip():
+        _append_diag(None, [f"host cache list(err): {err.strip()}"])
+        return []
+
+    entries: list[tuple[str, int]] = []
+    for p in [ln.strip() for ln in out.splitlines() if ln.strip().startswith("/")]:
+        c2, o2, _e2 = _host_sh(f'du -sb "{p}" 2>/dev/null | awk \'{{print $1}}\'')
         try:
-            sz, p = ln.split("\t", 1)
-            res.append((p, int(sz)))
+            sz = int(o2.strip() or "0")
         except Exception:
-            continue
-    return res
+            sz = 0
+        entries.append((p, sz))
+    return entries
 
 
 # ─────────────────────────── UI ───────────────────────────
@@ -393,11 +385,9 @@ class SpruceWindow(Adw.ApplicationWindow):
             self.pkg_list.set_text(" ".join(pkgs))
             self.remove_btn.set_sensitive(True)
         else:
-            # If nothing detected, keep the diagnostics visible
             if not self.pkg_list.get_text():
                 self.pkg_list.set_text("No unused runtimes or extensions to remove.")
             self.remove_btn.set_sensitive(False)
-
         return GLib.SOURCE_REMOVE
 
     def _on_remove_clicked(self, _btn):
