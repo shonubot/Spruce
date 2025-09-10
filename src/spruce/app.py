@@ -90,60 +90,32 @@ def xdg_cache() -> Path:
 
 # ─────────────────────────── subprocess helpers (Gio) ───────────────────────────
 
-def _subprocess_run(argv: list[str], stdin: bytes | None = None, timeout_ms: int | None = None) -> tuple[int, str, str]:
-    """
-    Run a command with Gio.Subprocess, capture stdout/stderr as UTF-8.
-    """
-    try:
-        flags = Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
-        if stdin is not None:
-            flags |= Gio.SubprocessFlags.STDIN_PIPE
-        sp = Gio.Subprocess.new(argv, flags)
-        if stdin is not None:
-            ostream = sp.get_stdin_pipe()
-            try:
-                ostream.write(stdin)
-                ostream.close()
-            except Exception:
-                pass
-        # blocking wait
-        if timeout_ms is None:
-            sp.wait()
-        else:
-            # simple polling wait loop
-            elapsed = 0
-            step = 50
-            while not sp.wait_check(None):
-                GLib.usleep(step * 1000)
-                elapsed += step
-                if elapsed >= timeout_ms:
-                    try:
-                        sp.force_exit()
-                    except Exception:
-                        pass
-                    break
-        stdout = sp.get_stdout_pipe().read_bytes(-1, None).get_data().decode("utf-8", "replace") if sp.get_stdout_pipe() else ""
-        stderr = sp.get_stderr_pipe().read_bytes(-1, None).get_data().decode("utf-8", "replace") if sp.get_stderr_pipe() else ""
-        try:
-            ok = sp.get_successful()
-            code = 0 if ok else sp.get_exit_status()
-        except Exception:
-            code = sp.get_exit_status()
-        return code, stdout, stderr
-    except Exception as e:
-        return 127, "", str(e)
-
-
 def _host_exec(*argv: str) -> list[str]:
     return ["flatpak-spawn", "--host", *argv] if IS_FLATPAK else list(argv)
 
-
-def _spawn_capture(argv: list[str], stdin: bytes | None = None) -> tuple[int, str, str]:
-    return _subprocess_run(argv, stdin=stdin)
-
+def _run(argv: list[str], stdin_text: str | None = None) -> tuple[int, str, str]:
+    """
+    Run a command with Gio.Subprocess and capture stdout/stderr (UTF-8).
+    Uses communicate_utf8() to avoid any pipe-size footguns.
+    """
+    try:
+        flags = Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
+        if stdin_text is not None:
+            flags |= Gio.SubprocessFlags.STDIN_PIPE
+        sp = Gio.Subprocess.new(argv, flags)
+        ok, out, err = sp.communicate_utf8(stdin_text, None)
+        if ok:
+            return 0, out or "", err or ""
+        try:
+            code = sp.get_exit_status()
+        except Exception:
+            code = 1
+        return code, out or "", err or ""
+    except Exception as e:
+        return 127, "", str(e)
 
 def _host_sh(script: str) -> tuple[int, str, str]:
-    return _spawn_capture(_host_exec("bash", "-lc", script))
+    return _run(_host_exec("bash", "-lc", script))
 
 
 # ─────────────────── diagnostics shown in UI ───────────────────
@@ -168,8 +140,8 @@ APP_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+(?:\.[A-Za-z0-9_.-]+)+$")
 RUNTIME_LINE_RE = re.compile(r"^Runtime:\s*(.+?)\s*$", re.IGNORECASE)
 
 def _host_list_apps(scope: str) -> list[str]:
-    # Try columns first
-    code, out, err = _spawn_capture(_host_exec("flatpak", "list", "--app", scope, "--columns=application"))
+    # Try columns first (newer Flatpak)
+    code, out, err = _run(_host_exec("flatpak", "list", "--app", scope, "--columns=application"))
     apps: list[str] = []
     if code == 0 and out.strip():
         for ln in out.splitlines():
@@ -177,9 +149,9 @@ def _host_list_apps(scope: str) -> list[str]:
             if APP_ID_RE.match(app):
                 apps.append(app)
 
+    # Fallback: parse default table (older Flatpak)
     if not apps:
-        # Fallback: parse default table
-        code2, out2, err2 = _spawn_capture(_host_exec("flatpak", "list", "--app", scope))
+        code2, out2, err2 = _run(_host_exec("flatpak", "list", "--app", scope))
         text = out2 if code2 == 0 else err2
         for ln in text.splitlines():
             toks = ln.split()
@@ -194,7 +166,7 @@ def _host_list_apps(scope: str) -> list[str]:
 
 
 def _host_runtime_of_app(app_id: str, scope: str) -> str | None:
-    code, out, err = _spawn_capture(_host_exec("flatpak", "info", app_id, scope))
+    code, out, err = _run(_host_exec("flatpak", "info", app_id, scope))
     text = out if code == 0 else err
     for ln in text.splitlines():
         m = RUNTIME_LINE_RE.match(ln)
@@ -205,7 +177,7 @@ def _host_runtime_of_app(app_id: str, scope: str) -> str | None:
 
 
 def _host_installed_runtime_refs(scope: str) -> list[str]:
-    # Enumerate by filesystem; POSIX-simple pipelines
+    # Enumerate by filesystem; simple pipelines; no bash process-substitution
     if scope == "--user":
         script = r'''
 set -e
@@ -245,6 +217,7 @@ def _is_base_runtime(ref: str) -> bool:
     name, _, _ = _base_of(ref)
     if name.endswith(".Locale") or name.endswith(".Debug"):
         return False
+    # Treat common extensions as non-base
     if any(name.endswith(s) for s in (".GL.default", ".ffmpeg-full", ".openh264", ".codecs", ".codecs-extra")):
         return False
     return True
@@ -304,29 +277,16 @@ def run_flatpak_autoremove_async(on_done) -> None:
     user_cmd = _host_exec("flatpak", "uninstall", "--unused", "--user", "-y")
     sys_cmd  = _host_exec("flatpak", "uninstall", "--unused", "--system", "-y")
 
-    def _spawn(cmd):
+    def _spawn_and_wait(argv: list[str]):
         try:
-            sp = Gio.Subprocess.new(cmd, Gio.SubprocessFlags.NONE)
-            return sp
+            sp = Gio.Subprocess.new(argv, Gio.SubprocessFlags.NONE)
+            sp.wait()
         except Exception:
-            return None
+            pass
 
-    def after_user(sp: Gio.Subprocess | None, _task):
-        if sp is not None:
-            try:
-                sp.wait()
-            except Exception:
-                pass
-        sp2 = _spawn(sys_cmd)
-        if sp2 is not None:
-            try:
-                sp2.wait()
-            except Exception:
-                pass
-        GLib.timeout_add_seconds(1, on_done)
-
-    sp1 = _spawn(user_cmd)
-    after_user(sp1, None)
+    _spawn_and_wait(user_cmd)
+    _spawn_and_wait(sys_cmd)
+    GLib.timeout_add_seconds(1, on_done)
 
 
 # ─────────────────────────── cache sweep ───────────────────────────
@@ -349,7 +309,7 @@ def dir_size(path: Path) -> int:
 
 
 def _host_cache_paths_and_sizes() -> list[tuple[str, int]]:
-    # List host cache dirs and size them with du -sb (one per path)
+    # List host cache dirs and size them with du -sb (one call per path)
     code, out, err = _host_sh(r'''
 set -e
 paths=""
@@ -359,16 +319,14 @@ if [ -d "$HOME/.var/app" ]; then
 $(find "$HOME/.var/app" -mindepth 2 -maxdepth 2 -type d -name cache -print)
 EOF
 fi
-for p in $paths; do printf "%s\n", "$p"; done
+for p in $paths; do printf "%s\n" "$p"; done
 ''')
     if code != 0 and err.strip():
         _append_diag(None, [f"host cache list(err): {err.strip()}"])
         return []
 
     entries: list[tuple[str, int]] = []
-    for p in [ln.strip(" ,") for ln in out.splitlines() if ln.strip()]:
-        if not p.startswith("/"):
-            continue
+    for p in [ln.strip() for ln in out.splitlines() if ln.strip().startswith("/")]:
         c2, o2, _e2 = _host_sh(f'du -sb "{p}" 2>/dev/null | awk \'{{print $1}}\'')
         try:
             sz = int(o2.strip() or "0")
@@ -580,9 +538,8 @@ class SpruceWindow(Adw.ApplicationWindow):
                     except Exception:
                         pass
             if host_targets:
-                # rm -rf each host target
                 for t in host_targets:
-                    _spawn_capture(_host_exec("bash", "-lc", f'rm -rf -- "{t}"'))
+                    _run(_host_exec("bash", "-lc", f'rm -rf -- "{t}"'))
                 removed += len(host_targets)
 
             if removed:
