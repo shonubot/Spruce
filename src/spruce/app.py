@@ -88,22 +88,58 @@ def xdg_cache() -> Path:
     return Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
 
 
+# ─────────────────────────── subprocess helpers (Gio) ───────────────────────────
+
+def _subprocess_run(argv: list[str], stdin: bytes | None = None, timeout_ms: int | None = None) -> tuple[int, str, str]:
+    """
+    Run a command with Gio.Subprocess, capture stdout/stderr as UTF-8.
+    """
+    try:
+        flags = Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
+        if stdin is not None:
+            flags |= Gio.SubprocessFlags.STDIN_PIPE
+        sp = Gio.Subprocess.new(argv, flags)
+        if stdin is not None:
+            ostream = sp.get_stdin_pipe()
+            try:
+                ostream.write(stdin)
+                ostream.close()
+            except Exception:
+                pass
+        # blocking wait
+        if timeout_ms is None:
+            sp.wait()
+        else:
+            # simple polling wait loop
+            elapsed = 0
+            step = 50
+            while not sp.wait_check(None):
+                GLib.usleep(step * 1000)
+                elapsed += step
+                if elapsed >= timeout_ms:
+                    try:
+                        sp.force_exit()
+                    except Exception:
+                        pass
+                    break
+        stdout = sp.get_stdout_pipe().read_bytes(-1, None).get_data().decode("utf-8", "replace") if sp.get_stdout_pipe() else ""
+        stderr = sp.get_stderr_pipe().read_bytes(-1, None).get_data().decode("utf-8", "replace") if sp.get_stderr_pipe() else ""
+        try:
+            ok = sp.get_successful()
+            code = 0 if ok else sp.get_exit_status()
+        except Exception:
+            code = sp.get_exit_status()
+        return code, stdout, stderr
+    except Exception as e:
+        return 127, "", str(e)
+
+
 def _host_exec(*argv: str) -> list[str]:
     return ["flatpak-spawn", "--host", *argv] if IS_FLATPAK else list(argv)
 
 
-def _spawn_capture(cmd: list[str]) -> tuple[int, str, str]:
-    try:
-        ok, out, err, st = GLib.spawn_sync(
-            None, cmd, None,
-            GLib.SpawnFlags.SEARCH_PATH
-            | GLib.SpawnFlags.STDOUT_TO_PIPE
-            | GLib.SpawnFlags.STDERR_TO_PIPE,
-            None
-        )
-        return int(st) if isinstance(st, int) else 0, (out or b"").decode(), (err or b"").decode()
-    except Exception as e:
-        return 127, "", str(e)
+def _spawn_capture(argv: list[str], stdin: bytes | None = None) -> tuple[int, str, str]:
+    return _subprocess_run(argv, stdin=stdin)
 
 
 def _host_sh(script: str) -> tuple[int, str, str]:
@@ -132,7 +168,7 @@ APP_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+(?:\.[A-Za-z0-9_.-]+)+$")
 RUNTIME_LINE_RE = re.compile(r"^Runtime:\s*(.+?)\s*$", re.IGNORECASE)
 
 def _host_list_apps(scope: str) -> list[str]:
-    # Try modern columns output first
+    # Try columns first
     code, out, err = _spawn_capture(_host_exec("flatpak", "list", "--app", scope, "--columns=application"))
     apps: list[str] = []
     if code == 0 and out.strip():
@@ -169,7 +205,7 @@ def _host_runtime_of_app(app_id: str, scope: str) -> str | None:
 
 
 def _host_installed_runtime_refs(scope: str) -> list[str]:
-    # POSIX-simple pipelines; no process-substitution; surface stderr on error
+    # Enumerate by filesystem; POSIX-simple pipelines
     if scope == "--user":
         script = r'''
 set -e
@@ -209,7 +245,6 @@ def _is_base_runtime(ref: str) -> bool:
     name, _, _ = _base_of(ref)
     if name.endswith(".Locale") or name.endswith(".Debug"):
         return False
-    # Treat GL.default, ffmpeg-full, openh264, codecs as extensions
     if any(name.endswith(s) for s in (".GL.default", ".ffmpeg-full", ".openh264", ".codecs", ".codecs-extra")):
         return False
     return True
@@ -271,23 +306,27 @@ def run_flatpak_autoremove_async(on_done) -> None:
 
     def _spawn(cmd):
         try:
-            pid, _, _ = GLib.spawn_async(cmd, flags=GLib.SpawnFlags.SEARCH_PATH)
-            return pid
+            sp = Gio.Subprocess.new(cmd, Gio.SubprocessFlags.NONE)
+            return sp
         except Exception:
             return None
 
-    def after_user(_pid, _cond):
-        pid2 = _spawn(sys_cmd)
-        if pid2:
-            GLib.child_watch_add(GLib.PRIORITY_DEFAULT, pid2, lambda *_: GLib.timeout_add_seconds(1, on_done))
-        else:
-            GLib.timeout_add_seconds(1, on_done)
+    def after_user(sp: Gio.Subprocess | None, _task):
+        if sp is not None:
+            try:
+                sp.wait()
+            except Exception:
+                pass
+        sp2 = _spawn(sys_cmd)
+        if sp2 is not None:
+            try:
+                sp2.wait()
+            except Exception:
+                pass
+        GLib.timeout_add_seconds(1, on_done)
 
-    pid1 = _spawn(user_cmd)
-    if pid1:
-        GLib.child_watch_add(GLib.PRIORITY_DEFAULT, pid1, after_user)
-    else:
-        after_user(None, None)
+    sp1 = _spawn(user_cmd)
+    after_user(sp1, None)
 
 
 # ─────────────────────────── cache sweep ───────────────────────────
@@ -310,7 +349,7 @@ def dir_size(path: Path) -> int:
 
 
 def _host_cache_paths_and_sizes() -> list[tuple[str, int]]:
-    # List host cache dirs and size them with du -sb (one per path for portability)
+    # List host cache dirs and size them with du -sb (one per path)
     code, out, err = _host_sh(r'''
 set -e
 paths=""
@@ -320,14 +359,16 @@ if [ -d "$HOME/.var/app" ]; then
 $(find "$HOME/.var/app" -mindepth 2 -maxdepth 2 -type d -name cache -print)
 EOF
 fi
-for p in $paths; do printf "%s\n" "$p"; done
+for p in $paths; do printf "%s\n", "$p"; done
 ''')
     if code != 0 and err.strip():
         _append_diag(None, [f"host cache list(err): {err.strip()}"])
         return []
 
     entries: list[tuple[str, int]] = []
-    for p in [ln.strip() for ln in out.splitlines() if ln.strip().startswith("/")]:
+    for p in [ln.strip(" ,") for ln in out.splitlines() if ln.strip()]:
+        if not p.startswith("/"):
+            continue
         c2, o2, _e2 = _host_sh(f'du -sb "{p}" 2>/dev/null | awk \'{{print $1}}\'')
         try:
             sz = int(o2.strip() or "0")
@@ -539,8 +580,9 @@ class SpruceWindow(Adw.ApplicationWindow):
                     except Exception:
                         pass
             if host_targets:
-                script = " ; ".join([f'rm -rf -- "{t}"' for t in host_targets])
-                _host_sh(script)
+                # rm -rf each host target
+                for t in host_targets:
+                    _spawn_capture(_host_exec("bash", "-lc", f'rm -rf -- "{t}"'))
                 removed += len(host_targets)
 
             if removed:
