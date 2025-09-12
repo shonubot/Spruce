@@ -139,28 +139,22 @@ APP_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+(?:\.[A-Za-z0-9_.-]+)+$")
 RUNTIME_LINE_RE = re.compile(r"^Runtime:\s*(.+?)\s*$", re.IGNORECASE)
 
 def _host_list_apps(scope: str) -> list[str]:
-    # Try columns first (newer Flatpak)
-    code, out, err = _run(_host_exec("flatpak", "list", "--app", scope, "--columns=application"))
+    # Prefer columns API
+    code, out, _ = _run(_host_exec("flatpak", "list", "--app", scope, "--columns=application"))
     apps: list[str] = []
     if code == 0 and out.strip():
         for ln in out.splitlines():
             app = ln.strip()
             if APP_ID_RE.match(app):
                 apps.append(app)
-
-    # Fallback: parse default table (older Flatpak)
+    # Fallback parse
     if not apps:
         code2, out2, err2 = _run(_host_exec("flatpak", "list", "--app", scope))
         text = out2 if code2 == 0 else err2
         for ln in text.splitlines():
-            toks = ln.split()
-            for t in toks:
-                if APP_ID_RE.match(t):
-                    apps.append(t)
-                    break
-        if code != 0 and text.strip():
-            _append_diag(None, [f"{scope} list(err): {text.strip()}"])
-
+            for tok in ln.split():
+                if APP_ID_RE.match(tok):
+                    apps.append(tok); break
     return apps
 
 
@@ -175,8 +169,41 @@ def _host_runtime_of_app(app_id: str, scope: str) -> str | None:
     return None
 
 
+def _list_runtime_refs_via_flatpak(scope: str) -> list[str]:
+    """
+    Prefer authoritative list from Flatpak itself.
+    """
+    code, out, _ = _run(_host_exec("flatpak", "list", "--runtime", scope, "--columns=ref"))
+    refs: list[str] = []
+    if code == 0 and out.strip():
+        refs = [ln.strip() for ln in out.splitlines() if ln.strip()]
+        refs = [r if r.startswith("runtime/") else f"runtime/{r}" for r in refs]
+        return sorted(set(refs))
+
+    # Older fallback: parse table output
+    code2, out2, err2 = _run(_host_exec("flatpak", "list", "--runtime", scope))
+    text = out2 if code2 == 0 else err2
+    for ln in text.splitlines():
+        toks = [t for t in ln.split() if "/" in t]
+        if toks:
+            t = toks[-1].strip()
+            if t.count("/") >= 2:
+                refs.append(t if t.startswith("runtime/") else f"runtime/{t}")
+    return sorted(set(refs))
+
+
 def _host_installed_runtime_refs(scope: str) -> list[str]:
-    # Enumerate by filesystem; simple pipelines; no bash process-substitution
+    """
+    Get installed runtime refs for --user or --system.
+    1) Prefer `flatpak list --runtime … --columns=ref`
+    2) Fall back to filesystem enumeration only if needed.
+    """
+    refs = _list_runtime_refs_via_flatpak(scope)
+    if refs:
+        refs = [r for r in refs if r.startswith("runtime/")]
+        return refs
+
+    # Fallback — filesystem
     if scope == "--user":
         script = r'''
 set -e
@@ -200,9 +227,8 @@ find "$r" -mindepth 3 -maxdepth 3 -type d | sort \
 | awk -F/ 'BEGIN{OFS="/"} {rid=$(NF-2); arch=$(NF-1); br=$NF; print "runtime/"rid"/"arch"/"br}' \
 | awk "!x[$0]++"
 '''
-    code, out, err = _host_sh(script)
-    if code != 0 and err.strip():
-        _append_diag(None, [f"{scope} refs(err): {err.strip()}"])
+    code, out, _ = _host_sh(script)
+    if code != 0:
         return []
     return [ln.strip() for ln in out.splitlines() if ln.strip().startswith("runtime/")]
 
@@ -216,7 +242,7 @@ def _is_base_runtime(ref: str) -> bool:
     name, _, _ = _base_of(ref)
     if name.endswith(".Locale") or name.endswith(".Debug"):
         return False
-    # Treat common extensions as non-base
+    # Common extensions are non-base
     if any(name.endswith(s) for s in (".GL.default", ".ffmpeg-full", ".openh264", ".codecs", ".codecs-extra")):
         return False
     return True
@@ -278,6 +304,7 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> list[str]:
             if base not in used_bases:
                 all_refs.append(ref)
 
+    # de-dup
     seen, uniq = set(), []
     for r in all_refs:
         if r not in seen:
