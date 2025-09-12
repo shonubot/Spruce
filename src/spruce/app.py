@@ -286,22 +286,25 @@ def _list_pins(scope: str) -> set[str]:
 
     # 2) Fallback: filenames + file CONTENTS from pinned directory
     pin_dir = "$HOME/.local/share/flatpak/pinned" if scope == "--user" else "/var/lib/flatpak/pinned"
-    script = rf'''
-set -e
-d={pin_dir}
-[ -d "$d" ] || exit 0
-# A) filenames that look like refs
-for f in "$d"/*; do
-  [ -e "$f" ] || continue
-  bn=$(basename -- "$f")
-  echo "FILENAME::{bn}"
-done
-# B) file contents (strip comments/whitespace)
-for f in "$d"/*; do
-  [ -f "$f" ] || continue
-  sed -e 's/#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$f" | awk 'NF>0{print "CONTENT::"$0}'
-done
-'''
+
+    # Build the script as a normal string (NOT an f-string) to avoid `{}` issues with AWK.
+    script = (
+        "set -e\n"
+        f"d={pin_dir}\n"
+        '[ -d "$d" ] || exit 0\n'
+        '# A) filenames that look like refs\n'
+        'for f in "$d"/*; do\n'
+        '  [ -e "$f" ] || continue\n'
+        '  bn=$(basename -- "$f")\n'
+        '  echo "FILENAME::${bn}"\n'
+        'done\n'
+        '# B) file contents (strip comments/whitespace)\n'
+        'for f in "$d"/*; do\n'
+        '  [ -f "$f" ] || continue\n'
+        "  sed -e 's/#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \"$f\" | awk 'NF>0{print \"CONTENT::\"$0}'\n"
+        'done\n'
+    )
+
     code2, out2, _ = _host_sh(script)
     if code2 == 0 and out2.strip():
         for ln in out2.splitlines():
