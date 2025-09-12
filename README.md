@@ -15,6 +15,6 @@ PYTHONPATH=src python3 -m spruce.app
 
 ## Build (Flatpak)
 ```bash
-flatpak-builder build-dir io.github.shonubot.Spruce.yml --install --user
+flatpak-builder build-dir io.github.shonubot.Spruce.json --install --user
 flatpak run io.github.shonubot.Spruce
 ```
