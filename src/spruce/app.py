@@ -170,9 +170,7 @@ def _host_runtime_of_app(app_id: str, scope: str) -> str | None:
 
 
 def _list_runtime_refs_via_flatpak(scope: str) -> list[str]:
-    """
-    Prefer authoritative list from Flatpak itself.
-    """
+    """Prefer authoritative list from Flatpak itself."""
     code, out, _ = _run(_host_exec("flatpak", "list", "--runtime", scope, "--columns=ref"))
     refs: list[str] = []
     if code == 0 and out.strip():
@@ -193,11 +191,7 @@ def _list_runtime_refs_via_flatpak(scope: str) -> list[str]:
 
 
 def _host_installed_runtime_refs(scope: str) -> list[str]:
-    """
-    Get installed runtime refs for --user or --system.
-    1) Prefer `flatpak list --runtime … --columns=ref`
-    2) Fall back to filesystem enumeration only if needed.
-    """
+    """Get installed runtime refs for --user or --system."""
     refs = _list_runtime_refs_via_flatpak(scope)
     if refs:
         refs = [r for r in refs if r.startswith("runtime/")]
@@ -233,38 +227,69 @@ find "$r" -mindepth 3 -maxdepth 3 -type d | sort \
     return [ln.strip() for ln in out.splitlines() if ln.strip().startswith("runtime/")]
 
 
+# Always-kept and SDK filters (to match expectations)
+_ALWAYS_KEEP_EXT_SUFFIXES = (".GL.default", ".codecs", ".codecs-extra", ".openh264")
+
+def _is_always_kept_extension(ref: str) -> bool:
+    name = _base_of(ref)[0]
+    return any(name.endswith(suf) for suf in _ALWAYS_KEEP_EXT_SUFFIXES)
+
+def _is_sdk_family(ref: str) -> bool:
+    name = _base_of(ref)[0]
+    return name.endswith(".Sdk") or name.endswith(".Sdk.Locale")
+
 def _base_of(ref: str) -> tuple[str, str, str]:
     parts = ref.split("/", 4)
     return (parts[1], parts[2], parts[3]) if len(parts) >= 4 else (ref, "", "")
-
 
 def _is_base_runtime(ref: str) -> bool:
     name, _, _ = _base_of(ref)
     if name.endswith(".Locale") or name.endswith(".Debug"):
         return False
-    # Common extensions are non-base
     if any(name.endswith(s) for s in (".GL.default", ".ffmpeg-full", ".openh264", ".codecs", ".codecs-extra")):
         return False
     return True
-
-
-# Extensions Flatpak often keeps around that don't map cleanly to app runtimes
-_ALWAYS_KEEP_EXT_SUFFIXES = (
-    ".GL.default",
-    ".codecs",
-    ".codecs-extra",
-    ".openh264",
-)
-
-def _is_always_kept_extension(ref: str) -> bool:
-    name, _, _ = _base_of(ref)
-    return any(name.endswith(suf) for suf in _ALWAYS_KEEP_EXT_SUFFIXES)
-
 
 def _platform_from_ext(ref: str) -> str:
     name, _, _ = _base_of(ref)
     parts = name.split(".")
     return ".".join(parts[:3]) if len(parts) >= 3 else name
+
+
+def _list_pins(scope: str) -> set[str]:
+    """
+    Return a set of pinned refs for the given scope (--user/--system).
+    Newer Flatpak: `flatpak pin --list`.
+    Older Flatpak (e.g. 1.16.x): read from pinned/ directory.
+    """
+    pins: set[str] = set()
+
+    # 1) Try newer CLI
+    code, out, _ = _run(_host_exec("flatpak", "pin", "--list", scope))
+    if code == 0 and out.strip():
+        for ln in out.splitlines():
+            ref = ln.strip()
+            if ref:
+                pins.add(ref if ref.startswith("runtime/") else f"runtime/{ref}")
+        return pins
+
+    # 2) Fallback to filesystem
+    pin_dir = "$HOME/.local/share/flatpak/pinned" if scope == "--user" else "/var/lib/flatpak/pinned"
+    script = rf'''
+set -e
+d={pin_dir}
+[ -d "$d" ] || exit 0
+ls -1 "$d" 2>/dev/null | sed -e 's/\r$//' | awk 'NF>0{{print $0}}'
+'''
+    code2, out2, _ = _host_sh(script)
+    if code2 == 0 and out2.strip():
+        for ln in out2.splitlines():
+            ref = ln.strip()
+            if not ref:
+                continue
+            pins.add(ref if ref.startswith("runtime/") else f"runtime/{ref}")
+
+    return pins
 
 
 def list_flatpak_unused_with_diag(win: Gtk.Widget) -> list[str]:
@@ -274,9 +299,12 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> list[str]:
     for scope in ("--user", "--system"):
         refs = _host_installed_runtime_refs(scope)
         apps = _host_list_apps(scope)
+        pins = _list_pins(scope)
+
         diag.append(f"{scope} installed: {len(refs)}")
         if SPRUCE_DEBUG:
             diag.append(f"{scope} refs: {refs}")
+            diag.append(f"{scope} pins: {sorted(pins)}")
         diag.append(f"{scope} apps: {apps}")
 
         if not refs:
@@ -284,9 +312,14 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> list[str]:
 
         if not apps:
             for ref in refs:
-                if not _is_always_kept_extension(ref):
-                    all_refs.append(ref)
-            diag.append(f"{scope}: no apps — all non-driver/codec refs are candidates")
+                if ref in pins:
+                    continue
+                if _is_always_kept_extension(ref):
+                    continue
+                if _is_sdk_family(ref):
+                    continue
+                all_refs.append(ref)
+            diag.append(f"{scope}: no apps — non-driver/codec non-SDK refs (unpinned) are candidates")
             continue
 
         used_bases = set()
@@ -298,7 +331,11 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> list[str]:
             diag.append(f"{scope} used bases: {sorted(used_bases)}")
 
         for ref in refs:
+            if ref in pins:
+                continue
             if _is_always_kept_extension(ref):
+                continue
+            if _is_sdk_family(ref):
                 continue
             base = _base_of(ref)[0] if _is_base_runtime(ref) else _platform_from_ext(ref)
             if base not in used_bases:
