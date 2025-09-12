@@ -115,9 +115,11 @@ def _host_sh(script: str) -> tuple[int, str, str]:
     return _run(_host_exec("bash", "-lc", script))
 
 
-# ─────────────────── diagnostics shown in UI ───────────────────
+# ─────────────────── diagnostics to UI (debug-only) ───────────────────
 
 def _append_diag(win: Gtk.Widget | None, lines: list[str]) -> None:
+    if not SPRUCE_DEBUG:
+        return  # quiet unless explicitly enabled
     try:
         app = Gtk.Application.get_default()
         w = (app.props.active_window if app else None) or win  # type: ignore
@@ -442,8 +444,7 @@ class SpruceWindow(Adw.ApplicationWindow):
             self.pkg_list.set_text(" ".join(pkgs))
             self.remove_btn.set_sensitive(True)
         else:
-            if not self.pkg_list.get_text():
-                self.pkg_list.set_text("No unused runtimes or extensions to remove.")
+            self.pkg_list.set_text("Nothing unused to uninstall")
             self.remove_btn.set_sensitive(False)
         return GLib.SOURCE_REMOVE
 
