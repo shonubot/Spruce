@@ -258,13 +258,13 @@ def _platform_from_ext(ref: str) -> str:
 
 def _list_pins(scope: str) -> set[str]:
     """
-    Return a set of pinned refs for the given scope (--user/--system).
+    Return pinned refs for --user/--system.
     Newer Flatpak: `flatpak pin --list`.
-    Older Flatpak (e.g. 1.16.x): read from pinned/ directory.
+    Older Flatpak (e.g. 1.16.x): read *contents* of files inside the installation's pinned/ dir.
     """
     pins: set[str] = set()
 
-    # 1) Try newer CLI
+    # 1) Try newer CLI (may not exist on 1.16.x)
     code, out, _ = _run(_host_exec("flatpak", "pin", "--list", scope))
     if code == 0 and out.strip():
         for ln in out.splitlines():
@@ -273,13 +273,18 @@ def _list_pins(scope: str) -> set[str]:
                 pins.add(ref if ref.startswith("runtime/") else f"runtime/{ref}")
         return pins
 
-    # 2) Fallback to filesystem
+    # 2) Fallback: read file CONTENTS from pinned directory
     pin_dir = "$HOME/.local/share/flatpak/pinned" if scope == "--user" else "/var/lib/flatpak/pinned"
     script = rf'''
 set -e
 d={pin_dir}
 [ -d "$d" ] || exit 0
-ls -1 "$d" 2>/dev/null | sed -e 's/\r$//' | awk 'NF>0{{print $0}}'
+for f in "$d"/*; do
+  [ -f "$f" ] || continue
+  # strip comments and whitespace; print non-empty lines (refs)
+  sed -e 's/#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$f" \
+  | awk 'NF>0{{print $0}}'
+done
 '''
     code2, out2, _ = _host_sh(script)
     if code2 == 0 and out2.strip():
@@ -399,7 +404,7 @@ def dir_size(path: Path) -> int:
 
 
 def _du_host_bytes(path: str) -> int:
-    c, out, _ = _host_sh(f'du -sb "{path}" 2>/dev/null | awk \'{{print $1}}\'')
+    c, out, _ = _host_sh(f'f=$(printf "%s" "{path}" | sed "s/[$]\\|`\\|\\\\"/\\\\&/g"); du -sb "$f" 2>/dev/null | awk \'{{print $1}}\'')
     try:
         return int((out or "0").strip() or "0")
     except Exception:
