@@ -96,7 +96,7 @@ def _host_exec(*argv: str) -> list[str]:
 def _run(argv: list[str], stdin_text: str | None = None) -> tuple[int, str, str]:
     """
     Run a command with Gio.Subprocess and capture stdout/stderr (UTF-8).
-    Uses communicate_utf8() to avoid pipe-size footguns.
+    Uses communicate_utf8() for portability across gi versions.
     """
     try:
         flags = Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
@@ -223,7 +223,13 @@ def _is_base_runtime(ref: str) -> bool:
     return True
 
 
-# Extensions Flatpak often keeps around that don't map cleanly to app runtimes
+def _platform_from_ext(ref: str) -> str:
+    name, _, _ = _base_of(ref)
+    parts = name.split(".")
+    return ".".join(parts[:3]) if len(parts) >= 3 else name
+
+
+# Extensions Flatpak tends to keep installed and which don't map cleanly to app runtimes.
 _ALWAYS_KEEP_EXT_SUFFIXES = (
     ".GL.default",
     ".codecs",
@@ -234,12 +240,6 @@ _ALWAYS_KEEP_EXT_SUFFIXES = (
 def _is_always_kept_extension(ref: str) -> bool:
     name, _, _ = _base_of(ref)
     return any(name.endswith(suf) for suf in _ALWAYS_KEEP_EXT_SUFFIXES)
-
-
-def _platform_from_ext(ref: str) -> str:
-    name, _, _ = _base_of(ref)
-    parts = name.split(".")
-    return ".".join(parts[:3]) if len(parts) >= 3 else name
 
 
 def list_flatpak_unused_with_diag(win: Gtk.Widget) -> list[str]:
@@ -258,11 +258,11 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> list[str]:
             continue
 
         if not apps:
-            # No apps at this scope; everything (except always-kept) is a candidate
+            # If there are no apps at all in this scope, *everything* looks unused.
+            # Still, skip always-kept extensions to avoid false positives.
             for ref in refs:
                 if not _is_always_kept_extension(ref):
                     all_refs.append(ref)
-            diag.append(f"{scope}: no apps — all non-driver/codec refs are candidates")
             continue
 
         used_bases = set()
@@ -293,12 +293,12 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> list[str]:
 
 def run_flatpak_autoremove_async(on_done) -> None:
     """
-    Run flatpak uninstall --unused for user and system, count removals,
-    and show a toast if nothing was removed.
+    Run `flatpak uninstall --unused` for user and system, count removals,
+    and show a toast if nothing changed.
     """
     def _run_and_count(scope: str) -> int:
         code, out, err = _run(_host_exec("flatpak", "uninstall", "--unused", scope, "-y"))
-        # Lines like: "Uninstalling runtime/org.foo/x86_64/24.08"
+        # Lines look like: "Uninstalling runtime/org.foo.Bar/x86_64/24.08"
         count = sum(1 for ln in (out or "").splitlines() if ln.strip().startswith("Uninstalling "))
         return count
 
@@ -313,17 +313,19 @@ def run_flatpak_autoremove_async(on_done) -> None:
         pass
 
     def _after():
+        # Refresh the UI
         on_done()
+        # Also inform the user if nothing changed
         app = Gtk.Application.get_default()
         win = app.props.active_window if app else None
-        if win and hasattr(win, "_toast"):
-            try:
+        try:
+            if win and hasattr(win, "_toast"):
                 if removed > 0:
-                    win._toast(f"Removed {removed} item(s)")
+                    win._toast(f"Removed {removed} unused item(s)")
                 else:
                     win._toast("Flatpak reported nothing unused to uninstall")
-            except Exception:
-                pass
+        except Exception:
+            pass
         return GLib.SOURCE_REMOVE
 
     GLib.timeout_add_seconds(1, _after)
@@ -354,9 +356,6 @@ def _host_cache_paths_and_sizes() -> list[tuple[str, int]]:
 set -e
 paths=""
 [ -d "$HOME/.cache" ] && paths="$paths $HOME/.cache"
-if [ -d "$HOME/.var/app" ] then
-  :
-fi
 if [ -d "$HOME/.var/app" ]; then
   while IFS= read -r d; do paths="$paths $d"; done <<EOF
 $(find "$HOME/.var/app" -mindepth 2 -maxdepth 2 -type d -name cache -print)
