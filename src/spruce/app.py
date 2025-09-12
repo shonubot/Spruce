@@ -240,7 +240,11 @@ def _is_sdk_family(ref: str) -> bool:
 
 def _is_platform_family(ref: str) -> bool:
     name = _base_of(ref)[0]
-    return name.endswith(".Platform") or name.endswith(".Platform.Locale")
+    return (
+        name.endswith(".Platform")
+        or name.endswith(".Platform.Locale")
+        or name.endswith(".Platform.Debug")
+    )
 
 def _base_of(ref: str) -> tuple[str, str, str]:
     parts = ref.split("/", 4)
@@ -374,21 +378,24 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> list[str]:
         if SPRUCE_DEBUG:
             diag.append(f"{scope} used platform bases: {sorted(used_platform_bases)}")
 
-        # If there are no apps, the same logic applies: SDKs still imply a platform
         for ref in refs:
             if ref in pins:
                 continue
             if _is_always_kept_extension(ref):
                 continue
             if _is_sdk_family(ref):
-                # We never propose removing SDKs in this tool
                 continue
-            # Decide the base name to compare:
+            # NEW: never propose removing any Platform-family ref
+            if _is_platform_family(ref):
+                continue
+
+            # Decide the base name to compare for other extensions
             base_name = _base_of(ref)[0] if _is_base_runtime(ref) else _platform_from_ext(ref)
-            # Keep platform if used by apps or implied by SDKs
-            if _is_platform_family(ref) and base_name in used_platform_bases:
+
+            # Keep extension if it belongs to a platform base used by apps or implied by SDKs
+            if base_name in used_platform_bases:
                 continue
-            # Otherwise it's unused
+
             all_refs.append(ref)
 
     # de-dup
