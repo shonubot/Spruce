@@ -94,10 +94,7 @@ def _host_exec(*argv: str) -> list[str]:
     return ["flatpak-spawn", "--host", *argv] if IS_FLATPAK else list(argv)
 
 def _run(argv: list[str], stdin_text: str | None = None) -> tuple[int, str, str]:
-    """
-    Run a command with Gio.Subprocess and capture stdout/stderr (UTF-8).
-    Uses communicate_utf8() for portability across gi versions.
-    """
+    """Run a command with Gio.Subprocess and capture stdout/stderr (UTF-8)."""
     try:
         flags = Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
         if stdin_text is not None:
@@ -223,13 +220,7 @@ def _is_base_runtime(ref: str) -> bool:
     return True
 
 
-def _platform_from_ext(ref: str) -> str:
-    name, _, _ = _base_of(ref)
-    parts = name.split(".")
-    return ".".join(parts[:3]) if len(parts) >= 3 else name
-
-
-# Extensions Flatpak tends to keep installed and which don't map cleanly to app runtimes.
+# Extensions Flatpak often keeps around that don't map cleanly to app runtimes
 _ALWAYS_KEEP_EXT_SUFFIXES = (
     ".GL.default",
     ".codecs",
@@ -240,6 +231,12 @@ _ALWAYS_KEEP_EXT_SUFFIXES = (
 def _is_always_kept_extension(ref: str) -> bool:
     name, _, _ = _base_of(ref)
     return any(name.endswith(suf) for suf in _ALWAYS_KEEP_EXT_SUFFIXES)
+
+
+def _platform_from_ext(ref: str) -> str:
+    name, _, _ = _base_of(ref)
+    parts = name.split(".")
+    return ".".join(parts[:3]) if len(parts) >= 3 else name
 
 
 def list_flatpak_unused_with_diag(win: Gtk.Widget) -> list[str]:
@@ -258,11 +255,10 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> list[str]:
             continue
 
         if not apps:
-            # If there are no apps at all in this scope, *everything* looks unused.
-            # Still, skip always-kept extensions to avoid false positives.
             for ref in refs:
                 if not _is_always_kept_extension(ref):
                     all_refs.append(ref)
+            diag.append(f"{scope}: no apps — all non-driver/codec refs are candidates")
             continue
 
         used_bases = set()
@@ -280,7 +276,6 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> list[str]:
             if base not in used_bases:
                 all_refs.append(ref)
 
-    # de-dup
     seen, uniq = set(), []
     for r in all_refs:
         if r not in seen:
@@ -292,40 +287,27 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> list[str]:
 
 
 def run_flatpak_autoremove_async(on_done) -> None:
-    """
-    Run `flatpak uninstall --unused` for user and system, count removals,
-    and show a toast if nothing changed.
-    """
+    """Run flatpak uninstall --unused for user+system and toast the result."""
     def _run_and_count(scope: str) -> int:
         code, out, err = _run(_host_exec("flatpak", "uninstall", "--unused", scope, "-y"))
-        # Lines look like: "Uninstalling runtime/org.foo.Bar/x86_64/24.08"
-        count = sum(1 for ln in (out or "").splitlines() if ln.strip().startswith("Uninstalling "))
-        return count
+        return sum(1 for ln in (out or "").splitlines() if ln.strip().startswith("Uninstalling "))
 
     removed = 0
-    try:
-        removed += _run_and_count("--user")
-    except Exception:
-        pass
-    try:
-        removed += _run_and_count("--system")
-    except Exception:
-        pass
+    try: removed += _run_and_count("--user")
+    except Exception: pass
+    try: removed += _run_and_count("--system")
+    except Exception: pass
 
     def _after():
-        # Refresh the UI
         on_done()
-        # Also inform the user if nothing changed
         app = Gtk.Application.get_default()
         win = app.props.active_window if app else None
-        try:
-            if win and hasattr(win, "_toast"):
-                if removed > 0:
-                    win._toast(f"Removed {removed} unused item(s)")
-                else:
-                    win._toast("Flatpak reported nothing unused to uninstall")
-        except Exception:
-            pass
+        if win and hasattr(win, "_toast"):
+            try:
+                win._toast(f"Removed {removed} item(s)" if removed > 0
+                           else "Flatpak reported nothing unused to uninstall")
+            except Exception:
+                pass
         return GLib.SOURCE_REMOVE
 
     GLib.timeout_add_seconds(1, _after)
@@ -350,32 +332,66 @@ def dir_size(path: Path) -> int:
     return total
 
 
-def _host_cache_paths_and_sizes() -> list[tuple[str, int]]:
-    # List host cache dirs and size them with du -sb (one call per path)
-    code, out, err = _host_sh(r'''
-set -e
-paths=""
-[ -d "$HOME/.cache" ] && paths="$paths $HOME/.cache"
-if [ -d "$HOME/.var/app" ]; then
-  while IFS= read -r d; do paths="$paths $d"; done <<EOF
-$(find "$HOME/.var/app" -mindepth 2 -maxdepth 2 -type d -name cache -print)
-EOF
-fi
-for p in $paths; do printf "%s\n" "$p"; done
-''')
-    if code != 0 and err.strip():
-        _append_diag(None, [f"host cache list(err): {err.strip()}"])
-        return []
+def _du_host_bytes(path: str) -> int:
+    c, out, _ = _host_sh(f'du -sb "{path}" 2>/dev/null | awk \'{{print $1}}\'')
+    try:
+        return int((out or "0").strip() or "0")
+    except Exception:
+        return 0
 
-    entries: list[tuple[str, int]] = []
-    for p in [ln.strip() for ln in out.splitlines() if ln.strip().startswith("/")]:
-        c2, o2, _e2 = _host_sh(f'du -sb "{p}" 2>/dev/null | awk \'{{print $1}}\'')
-        try:
-            sz = int(o2.strip() or "0")
-        except Exception:
-            sz = 0
-        entries.append((p, sz))
+
+def _host_first_level_cache_entries() -> list[tuple[str, int]]:
+    """First-level children of $HOME/.cache on host with sizes."""
+    script = r'''
+set -e
+root="$HOME/.cache"
+[ -d "$root" ] || exit 0
+find "$root" -mindepth 1 -maxdepth 1 -print
+'''
+    code, out, _ = _host_sh(script)
+    if code != 0:
+        return []
+    paths = [ln.strip() for ln in out.splitlines() if ln.strip().startswith("/")]
+    entries = [(p, _du_host_bytes(p)) for p in paths]
+    entries.sort(key=lambda t: t[1], reverse=True)
     return entries
+
+
+def _host_app_cache_entries() -> list[tuple[str, int]]:
+    """Top-level Flatpak app caches (~/.var/app/*/cache) on host."""
+    script = r'''
+set -e
+root="$HOME/.var/app"
+[ -d "$root" ] || exit 0
+find "$root" -mindepth 2 -maxdepth 2 -type d -name cache -print
+'''
+    code, out, _ = _host_sh(script)
+    if code != 0:
+        return []
+    entries = [(p, _du_host_bytes(p)) for p in
+               [ln.strip() for ln in out.splitlines() if ln.strip().startswith("/")]]
+    entries.sort(key=lambda t: t[1], reverse=True)
+    return entries
+
+
+def _sandbox_first_level_cache_entries() -> list[tuple[Path, int]]:
+    """First-level children of sandbox XDG_CACHE_HOME with sizes."""
+    root = xdg_cache()
+    result: list[tuple[Path, int]] = []
+    if not root.is_dir():
+        return result
+    for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+        try:
+            result.append((child, dir_size(child)))
+        except Exception:
+            pass
+    result.sort(key=lambda t: t[1], reverse=True)
+    return result
+
+
+def _host_cache_paths_and_sizes() -> list[tuple[str, int]]:
+    """Compatibility shim: host ~/.cache/* + ~/.var/app/*/cache."""
+    return _host_first_level_cache_entries() + _host_app_cache_entries()
 
 
 # ─────────────────────────── UI ───────────────────────────
@@ -457,9 +473,9 @@ class SpruceWindow(Adw.ApplicationWindow):
         removed = False
         c = xdg_cache()
         if self._opts["thumbs"]:   removed |= rm_rf(c / "thumbnails")
-        if self._opts["webkit"]:   removed |= rm_rf(c / "WebKitGTK") or rm_rf(c / "webkitgtk")
+        if self._opts["webkit"] :  removed |= rm_rf(c / "WebKitGTK") or rm_rf(c / "webkitgtk")
         if self._opts["fontconf"]: removed |= rm_rf(c / "fontconfig")
-        if self._opts["mesa"]:     removed |= rm_rf(c / "mesa_shader_cache")
+        if self._opts["mesa"]   :  removed |= rm_rf(c / "mesa_shader_cache")
         return removed
 
     def _on_options_clicked(self, _btn):
@@ -495,20 +511,22 @@ class SpruceWindow(Adw.ApplicationWindow):
     # ─────────────── cache sweep (host + sandbox) ───────────────
 
     def _scan_cache_in_thread(self):
+        """
+        Build the sweep list with:
+          • host ~/.cache/* (each first-level item)
+          • host ~/.var/app/*/cache  (one entry per app cache)
+          • sandbox XDG_CACHE/* (each first-level item)
+        """
         entries: list[tuple[Path, int, bool, bool]] = []
 
-        # sandbox cache roots
-        sc = xdg_cache()
-        if sc.is_dir():
-            for child in sorted(sc.iterdir(), key=lambda p: p.name.lower()):
-                try:
-                    entries.append((child, dir_size(child), True, False))
-                except Exception:
-                    pass
+        for apath, sz in _host_first_level_cache_entries():
+            entries.append((Path(apath), sz, True, True))
 
-        # host cache roots (absolute paths), with sizes
-        for path, size in _host_cache_paths_and_sizes():
-            entries.append((Path(path), size, True, True))
+        for apath, sz in _host_app_cache_entries():
+            entries.append((Path(apath), sz, True, True))
+
+        for p, sz in _sandbox_first_level_cache_entries():
+            entries.append((p, sz, True, False))
 
         GLib.idle_add(self._show_sweep_dialog, entries)
         return None
@@ -539,7 +557,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         deletable: List[bool] = []
         on_host_flags: List[bool] = []
 
-        for p, sz, can_delete, on_host in sorted(entries, key=lambda t: t[1], reverse=True):
+        for p, sz, can_delete, on_host in entries:
             loc = "host" if on_host else "sandbox"
             row = Adw.ActionRow(title=p.name, subtitle=f"{p} ({loc}) — {human_size(sz)}")
             sw = Gtk.Switch(valign=Gtk.Align.CENTER, sensitive=can_delete)
