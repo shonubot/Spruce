@@ -238,6 +238,10 @@ def _is_sdk_family(ref: str) -> bool:
     name = _base_of(ref)[0]
     return name.endswith(".Sdk") or name.endswith(".Sdk.Locale")
 
+def _is_platform_family(ref: str) -> bool:
+    name = _base_of(ref)[0]
+    return name.endswith(".Platform") or name.endswith(".Platform.Locale")
+
 def _base_of(ref: str) -> tuple[str, str, str]:
     parts = ref.split("/", 4)
     return (parts[1], parts[2], parts[3]) if len(parts) >= 4 else (ref, "", "")
@@ -255,12 +259,19 @@ def _platform_from_ext(ref: str) -> str:
     parts = name.split(".")
     return ".".join(parts[:3]) if len(parts) >= 3 else name
 
+def _sdk_to_platform_name(sdk_name: str) -> str:
+    # org.gnome.Sdk -> org.gnome.Platform (keep same first 3 components)
+    parts = sdk_name.split(".")
+    if len(parts) >= 3:
+        return ".".join(parts[:3]) + ".Platform"
+    return sdk_name.replace(".Sdk", ".Platform")
+
 
 def _list_pins(scope: str) -> set[str]:
     """
     Return pinned refs for --user/--system.
     Newer Flatpak: `flatpak pin --list`.
-    Older Flatpak (e.g. 1.16.x): read *contents* of files inside the installation's pinned/ dir.
+    Older Flatpak (e.g. 1.16.x): read both *filenames* and *file contents* under pinned/.
     """
     pins: set[str] = set()
 
@@ -273,28 +284,55 @@ def _list_pins(scope: str) -> set[str]:
                 pins.add(ref if ref.startswith("runtime/") else f"runtime/{ref}")
         return pins
 
-    # 2) Fallback: read file CONTENTS from pinned directory
+    # 2) Fallback: filenames + file CONTENTS from pinned directory
     pin_dir = "$HOME/.local/share/flatpak/pinned" if scope == "--user" else "/var/lib/flatpak/pinned"
     script = rf'''
 set -e
 d={pin_dir}
 [ -d "$d" ] || exit 0
+# A) filenames that look like refs
+for f in "$d"/*; do
+  [ -e "$f" ] || continue
+  bn=$(basename -- "$f")
+  echo "FILENAME::{bn}"
+done
+# B) file contents (strip comments/whitespace)
 for f in "$d"/*; do
   [ -f "$f" ] || continue
-  # strip comments and whitespace; print non-empty lines (refs)
-  sed -e 's/#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$f" \
-  | awk 'NF>0{{print $0}}'
+  sed -e 's/#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$f" | awk 'NF>0{print "CONTENT::"$0}'
 done
 '''
     code2, out2, _ = _host_sh(script)
     if code2 == 0 and out2.strip():
         for ln in out2.splitlines():
-            ref = ln.strip()
+            ln = ln.strip()
+            if not ln:
+                continue
+            if ln.startswith("FILENAME::"):
+                ref = ln[len("FILENAME::"):]
+            elif ln.startswith("CONTENT::"):
+                ref = ln[len("CONTENT::"):]
+            else:
+                ref = ln
+            # normalize
             if not ref:
                 continue
-            pins.add(ref if ref.startswith("runtime/") else f"runtime/{ref}")
+            if not ref.startswith("runtime/"):
+                # match things like org.gnome.Platform/x86_64/48
+                if re.match(r'^[A-Za-z0-9_.-]+(?:\.[A-Za-z0-9_.-]+)+/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$', ref):
+                    ref = f"runtime/{ref}"
+                else:
+                    continue
+            pins.add(ref)
 
     return pins
+
+
+def _installed_sdk_refs(scope: str) -> list[str]:
+    """Return installed SDK refs (and Sdk.Locale) for scope."""
+    refs = _host_installed_runtime_refs(scope)
+    sdks = [r for r in refs if _is_sdk_family(r)]
+    return sdks
 
 
 def list_flatpak_unused_with_diag(win: Gtk.Widget) -> list[str]:
@@ -305,46 +343,50 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> list[str]:
         refs = _host_installed_runtime_refs(scope)
         apps = _host_list_apps(scope)
         pins = _list_pins(scope)
+        sdks = _installed_sdk_refs(scope)
 
         diag.append(f"{scope} installed: {len(refs)}")
         if SPRUCE_DEBUG:
             diag.append(f"{scope} refs: {refs}")
             diag.append(f"{scope} pins: {sorted(pins)}")
+            diag.append(f"{scope} sdks: {sdks}")
         diag.append(f"{scope} apps: {apps}")
 
         if not refs:
             continue
 
-        if not apps:
-            for ref in refs:
-                if ref in pins:
-                    continue
-                if _is_always_kept_extension(ref):
-                    continue
-                if _is_sdk_family(ref):
-                    continue
-                all_refs.append(ref)
-            diag.append(f"{scope}: no apps — non-driver/codec non-SDK refs (unpinned) are candidates")
-            continue
-
-        used_bases = set()
+        # Determine platform bases used by apps
+        used_platform_bases = set()
         for a in apps:
             r = _host_runtime_of_app(a, scope)
             if r:
-                used_bases.add(_base_of(r)[0])
-        if SPRUCE_DEBUG:
-            diag.append(f"{scope} used bases: {sorted(used_bases)}")
+                used_platform_bases.add(_base_of(r)[0])
 
+        # Add platform bases implied by installed SDKs (Sdk -> Platform)
+        for sdk_ref in sdks:
+            sdk_name, arch, br = _base_of(sdk_ref)
+            platform_name = _sdk_to_platform_name(sdk_name)
+            used_platform_bases.add(platform_name)
+
+        if SPRUCE_DEBUG:
+            diag.append(f"{scope} used platform bases: {sorted(used_platform_bases)}")
+
+        # If there are no apps, the same logic applies: SDKs still imply a platform
         for ref in refs:
             if ref in pins:
                 continue
             if _is_always_kept_extension(ref):
                 continue
             if _is_sdk_family(ref):
+                # We never propose removing SDKs in this tool
                 continue
-            base = _base_of(ref)[0] if _is_base_runtime(ref) else _platform_from_ext(ref)
-            if base not in used_bases:
-                all_refs.append(ref)
+            # Decide the base name to compare:
+            base_name = _base_of(ref)[0] if _is_base_runtime(ref) else _platform_from_ext(ref)
+            # Keep platform if used by apps or implied by SDKs
+            if _is_platform_family(ref) and base_name in used_platform_bases:
+                continue
+            # Otherwise it's unused
+            all_refs.append(ref)
 
     # de-dup
     seen, uniq = set(), []
@@ -404,7 +446,7 @@ def dir_size(path: Path) -> int:
 
 
 def _du_host_bytes(path: str) -> int:
-    c, out, _ = _host_sh(f'f=$(printf "%s" "{path}" | sed "s/[$]\\|`\\|\\\\"/\\\\&/g"); du -sb "$f" 2>/dev/null | awk \'{{print $1}}\'')
+    c, out, _ = _host_sh(f'du -sb "{path}" 2>/dev/null | awk \'{{print $1}}\'')
     try:
         return int((out or "0").strip() or "0")
     except Exception:
