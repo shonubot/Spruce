@@ -1,0 +1,17 @@
+[build-system]
+requires = ["meson-python>=0.15", "wheel"]
+build-backend = "mesonpy"
+
+[project]
+name = "spruce"
+version = "0.1.0"
+description = "GTK4/libadwaita system cleaner for cache scanning, preview, and one-click clean."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Kavish Advani" }]
+license = { text = "GPL-3.0-or-later" }
+dependencies = ["PyGObject>=3.44"]
+
+# This creates /app/bin/spruce inside Flatpak
+[project.scripts]
+spruce = "spruce.__main__:main"
