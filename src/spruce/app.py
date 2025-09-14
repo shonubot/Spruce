@@ -111,9 +111,6 @@ def _run(argv: list[str], stdin_text: str | None = None) -> tuple[int, str, str]
     except Exception as e:
         return 127, "", str(e)
 
-def _host_sh(script: str) -> tuple[int, str, str]:
-    return _run(_host_exec("bash", "-lc", script))
-
 
 # ─────────────────── diagnostics to UI (debug-only) ───────────────────
 
@@ -192,42 +189,43 @@ def _list_runtime_refs_via_flatpak(scope: str) -> list[str]:
 
 def _host_installed_runtime_refs(scope: str) -> list[str]:
     """Get installed runtime refs for --user or --system."""
+    # 1) Ask flatpak
     refs = _list_runtime_refs_via_flatpak(scope)
     if refs:
-        refs = [r for r in refs if r.startswith("runtime/")]
-        return refs
+        return [r for r in refs if r.startswith("runtime/")]
 
-    # Fallback — filesystem
+    # 2) Pure-Python fallback: walk runtime dirs
+    roots: list[Path] = []
     if scope == "--user":
-        script = r'''
-set -e
-roots=""
-[ -n "$HOME" ] && [ -d "$HOME/.local/share/flatpak/runtime" ] && roots="$roots $HOME/.local/share/flatpak/runtime"
-[ -n "$USER" ] && [ -d "/var/home/$USER/.local/share/flatpak/runtime" ] && roots="$roots /var/home/$USER/.local/share/flatpak/runtime"
-[ -z "$roots" ] && exit 0
-for r in $roots; do
-  [ -d "$r" ] || continue
-  find "$r" -mindepth 3 -maxdepth 3 -type d
-done | sort \
-| awk -F/ 'BEGIN{OFS="/"} {rid=$(NF-2); arch=$(NF-1); br=$NF; print "runtime/"rid"/"arch"/"br}' \
-| awk "!x[$0]++"
-'''
+        roots.append(Path.home() / ".local" / "share" / "flatpak" / "runtime")
+        vhome = Path("/var/home") / os.environ.get("USER", "")
+        roots.append(vhome / ".local" / "share" / "flatpak" / "runtime")
     else:
-        script = r'''
-set -e
-r="/var/lib/flatpak/runtime"
-[ -d "$r" ] || exit 0
-find "$r" -mindepth 3 -maxdepth 3 -type d | sort \
-| awk -F/ 'BEGIN{OFS="/"} {rid=$(NF-2); arch=$(NF-1); br=$NF; print "runtime/"rid"/"arch"/"br}' \
-| awk "!x[$0]++"
-'''
-    code, out, _ = _host_sh(script)
-    if code != 0:
-        return []
-    return [ln.strip() for ln in out.splitlines() if ln.strip().startswith("runtime/")]
+        roots.append(Path("/var/lib/flatpak/runtime"))
+
+    results: set[str] = set()
+    for root in roots:
+        if not root.is_dir():
+            continue
+        try:
+            for name_dir in root.iterdir():
+                if not name_dir.is_dir():
+                    continue
+                for arch_dir in name_dir.iterdir():
+                    if not arch_dir.is_dir():
+                        continue
+                    for br_dir in arch_dir.iterdir():
+                        if not br_dir.is_dir():
+                            continue
+                        name, arch, br = name_dir.name, arch_dir.name, br_dir.name
+                        results.add(f"runtime/{name}/{arch}/{br}")
+        except Exception:
+            pass
+
+    return sorted(results)
 
 
-# Always-kept and SDK filters (to match expectations)
+# Safety settings
 _ALWAYS_KEEP_EXT_SUFFIXES = (".GL.default", ".codecs", ".codecs-extra", ".openh264")
 
 def _is_always_kept_extension(ref: str) -> bool:
@@ -271,15 +269,16 @@ def _sdk_to_platform_name(sdk_name: str) -> str:
     return sdk_name.replace(".Sdk", ".Platform")
 
 
+_PIN_COMMENT_RE = re.compile(r"#.*$")
+
 def _list_pins(scope: str) -> set[str]:
     """
     Return pinned refs for --user/--system.
-    Newer Flatpak: `flatpak pin --list`.
-    Older Flatpak (e.g. 1.16.x): read both *filenames* and *file contents* under pinned/.
+    Prefer `flatpak pin --list`; otherwise parse pinned/ files in pure Python.
     """
     pins: set[str] = set()
 
-    # 1) Try newer CLI (may not exist on 1.16.x)
+    # 1) Try newer CLI
     code, out, _ = _run(_host_exec("flatpak", "pin", "--list", scope))
     if code == 0 and out.strip():
         for ln in out.splitlines():
@@ -288,49 +287,46 @@ def _list_pins(scope: str) -> set[str]:
                 pins.add(ref if ref.startswith("runtime/") else f"runtime/{ref}")
         return pins
 
-    # 2) Fallback: filenames + file CONTENTS from pinned directory
-    pin_dir = "$HOME/.local/share/flatpak/pinned" if scope == "--user" else "/var/lib/flatpak/pinned"
+    # 2) Pure-Python fallback
+    pin_dir = (Path.home() / ".local/share/flatpak/pinned"
+               if scope == "--user" else Path("/var/lib/flatpak/pinned"))
+    if not pin_dir.is_dir():
+        return pins
 
-    # Build the script as a normal string (NOT an f-string) to avoid `{}` issues with AWK.
-    script = (
-        "set -e\n"
-        f"d={pin_dir}\n"
-        '[ -d "$d" ] || exit 0\n'
-        '# A) filenames that look like refs\n'
-        'for f in "$d"/*; do\n'
-        '  [ -e "$f" ] || continue\n'
-        '  bn=$(basename -- "$f")\n'
-        '  echo "FILENAME::${bn}"\n'
-        'done\n'
-        '# B) file contents (strip comments/whitespace)\n'
-        'for f in "$d"/*; do\n'
-        '  [ -f "$f" ] || continue\n'
-        "  sed -e 's/#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \"$f\" | awk 'NF>0{print \"CONTENT::\"$0}'\n"
-        'done\n'
-    )
+    # A) file names that look like refs
+    try:
+        for p in sorted(pin_dir.iterdir(), key=lambda q: q.name.lower()):
+            bn = p.name
+            looks_like_ref = (
+                bn.count("/") >= 2 or re.match(
+                    r'^[A-Za-z0-9_.-]+(?:\.[A-Za-z0-9_.-]+)+/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$', bn
+                )
+            )
+            if looks_like_ref:
+                pins.add(bn if bn.startswith("runtime/") else f"runtime/{bn}")
+    except Exception:
+        pass
 
-    code2, out2, _ = _host_sh(script)
-    if code2 == 0 and out2.strip():
-        for ln in out2.splitlines():
-            ln = ln.strip()
-            if not ln:
+    # B) file contents (strip comments/whitespace; skip blank)
+    try:
+        for p in sorted(pin_dir.iterdir(), key=lambda q: q.name.lower()):
+            if not p.is_file():
                 continue
-            if ln.startswith("FILENAME::"):
-                ref = ln[len("FILENAME::"):]
-            elif ln.startswith("CONTENT::"):
-                ref = ln[len("CONTENT::"):]
-            else:
-                ref = ln
-            # normalize
-            if not ref:
-                continue
-            if not ref.startswith("runtime/"):
-                # match things like org.gnome.Platform/x86_64/48
-                if re.match(r'^[A-Za-z0-9_.-]+(?:\.[A-Za-z0-9_.-]+)+/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$', ref):
-                    ref = f"runtime/{ref}"
-                else:
-                    continue
-            pins.add(ref)
+            with p.open("r", encoding="utf-8", errors="replace") as fh:
+                for raw in fh:
+                    line = _PIN_COMMENT_RE.sub("", raw).strip()
+                    if not line:
+                        continue
+                    if not line.startswith("runtime/"):
+                        if re.match(
+                            r'^[A-Za-z0-9_.-]+(?:\.[A-Za-z0-9_.-]+)+/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$', line
+                        ):
+                            line = f"runtime/{line}"
+                        else:
+                            continue
+                    pins.add(line)
+    except Exception:
+        pass
 
     return pins
 
@@ -342,9 +338,16 @@ def _installed_sdk_refs(scope: str) -> list[str]:
     return sdks
 
 
-def list_flatpak_unused_with_diag(win: Gtk.Widget) -> list[str]:
+def list_flatpak_unused_with_diag(win: Gtk.Widget) -> tuple[list[str], list[str], list[str]]:
+    """
+    Return (removable_refs, pinned_refs, kept_refs) after applying rules.
+    - pinned_refs: anything pinned (shown, not removable)
+    - kept_refs: safety-kept items (Platform/Locale, always-kept extensions, SDKs)
+    """
     diag: list[str] = []
-    all_refs: list[str] = []
+    removable_all: list[str] = []
+    pinned_all: list[str] = []
+    kept_all: list[str] = []
 
     for scope in ("--user", "--system"):
         refs = _host_installed_runtime_refs(scope)
@@ -362,14 +365,12 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> list[str]:
         if not refs:
             continue
 
-        # Determine platform bases used by apps
+        # Determine platform bases used by apps (and implied by SDKs)
         used_platform_bases = set()
         for a in apps:
             r = _host_runtime_of_app(a, scope)
             if r:
                 used_platform_bases.add(_base_of(r)[0])
-
-        # Add platform bases implied by installed SDKs (Sdk -> Platform)
         for sdk_ref in sdks:
             sdk_name, arch, br = _base_of(sdk_ref)
             platform_name = _sdk_to_platform_name(sdk_name)
@@ -379,34 +380,48 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> list[str]:
             diag.append(f"{scope} used platform bases: {sorted(used_platform_bases)}")
 
         for ref in refs:
+            # First: if pinned, surface in pinned list (regardless of safety filters)
             if ref in pins:
-                continue
-            if _is_always_kept_extension(ref):
-                continue
-            if _is_sdk_family(ref):
-                continue
-            # NEW: never propose removing any Platform-family ref
-            if _is_platform_family(ref):
+                pinned_all.append(ref)
                 continue
 
-            # Decide the base name to compare for other extensions
+            # Now compute safety status and “unused by our rules”
+            is_sdk = _is_sdk_family(ref)
+            is_platform = _is_platform_family(ref)
+            is_always_kept = _is_always_kept_extension(ref)
+
+            # Decide the base name for extension matching
             base_name = _base_of(ref)[0] if _is_base_runtime(ref) else _platform_from_ext(ref)
 
-            # Keep extension if it belongs to a platform base used by apps or implied by SDKs
+            # If this runtime/extension is actually used by an app/SDK-implied platform, skip entirely
             if base_name in used_platform_bases:
                 continue
 
-            all_refs.append(ref)
+            # If it’s one of the safety-kept types, list it under “Kept for safety”
+            if is_sdk or is_platform or is_always_kept:
+                kept_all.append(ref)
+                continue
 
-    # de-dup
-    seen, uniq = set(), []
-    for r in all_refs:
-        if r not in seen:
-            seen.add(r); uniq.append(r)
+            # Otherwise it’s removable by our rules
+            removable_all.append(ref)
 
-    diag.append(f"unused refs (merged): {uniq}")
+    # de-dup while preserving order
+    def dedup(seq: list[str]) -> list[str]:
+        seen = set(); out = []
+        for r in seq:
+            if r not in seen:
+                seen.add(r); out.append(r)
+        return out
+
+    removable = dedup(removable_all)
+    pinned = dedup(pinned_all)
+    kept = dedup(kept_all)
+
+    diag.append(f"unused refs (removable): {removable}")
+    diag.append(f"unused refs (pinned): {pinned}")
+    diag.append(f"unused refs (kept): {kept}")
     _append_diag(win, diag)
-    return uniq
+    return removable, pinned, kept
 
 
 def run_flatpak_autoremove_async(on_done) -> None:
@@ -456,45 +471,53 @@ def dir_size(path: Path) -> int:
 
 
 def _du_host_bytes(path: str) -> int:
-    c, out, _ = _host_sh(f'du -sb "{path}" 2>/dev/null | awk \'{{print $1}}\'')
+    p = Path(path)
+    total = 0
     try:
-        return int((out or "0").strip() or "0")
+        if p.is_dir():
+            for root, _dirs, files in os.walk(p, onerror=lambda *_: None):
+                for f in files:
+                    try:
+                        total += (Path(root) / f).stat().st_size
+                    except Exception:
+                        pass
+        elif p.exists():
+            total = p.stat().st_size
     except Exception:
-        return 0
+        total = 0
+    return total
 
 
 def _host_first_level_cache_entries() -> list[tuple[str, int]]:
-    """First-level children of $HOME/.cache on host with sizes."""
-    script = r'''
-set -e
-root="$HOME/.cache"
-[ -d "$root" ] || exit 0
-find "$root" -mindepth 1 -maxdepth 1 -print
-'''
-    code, out, _ = _host_sh(script)
-    if code != 0:
+    """First-level children of $HOME/.cache with sizes (pure Python)."""
+    root = Path.home() / ".cache"
+    if not root.is_dir():
         return []
-    paths = [ln.strip() for ln in out.splitlines() if ln.strip().startswith("/")]
-    entries = [(p, _du_host_bytes(p)) for p in paths]
+    entries: list[tuple[str, int]] = []
+    try:
+        for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+            entries.append((str(child), _du_host_bytes(str(child))))
+    except Exception:
+        pass
     entries.sort(key=lambda t: t[1], reverse=True)
     return entries
 
 
 def _host_app_cache_entries() -> list[tuple[str, int]]:
-    """Top-level Flatpak app caches (~/.var/app/*/cache) on host."""
-    script = r'''
-set -e
-root="$HOME/.var/app"
-[ -d "$root" ] || exit 0
-find "$root" -mindepth 2 -maxdepth 2 -type d -name cache -print
-'''
-    code, out, _ = _host_sh(script)
-    if code != 0:
+    """Top-level Flatpak app caches (~/.var/app/*/cache) on host (pure Python)."""
+    base = Path.home() / ".var" / "app"
+    if not base.is_dir():
         return []
-    entries = [(p, _du_host_bytes(p)) for p in
-               [ln.strip() for ln in out.splitlines() if ln.strip().startswith("/")]]
-    entries.sort(key=lambda t: t[1], reverse=True)
-    return entries
+    out: list[tuple[str, int]] = []
+    try:
+        for appdir in sorted(base.iterdir(), key=lambda p: p.name.lower()):
+            c = appdir / "cache"
+            if c.is_dir():
+                out.append((str(c), _du_host_bytes(str(c))))
+    except Exception:
+        pass
+    out.sort(key=lambda t: t[1], reverse=True)
+    return out
 
 
 def _sandbox_first_level_cache_entries() -> list[tuple[Path, int]]:
@@ -515,6 +538,24 @@ def _sandbox_first_level_cache_entries() -> list[tuple[Path, int]]:
 def _host_cache_paths_and_sizes() -> list[tuple[str, int]]:
     """Compatibility shim: host ~/.cache/* + ~/.var/app/*/cache."""
     return _host_first_level_cache_entries() + _host_app_cache_entries()
+
+
+# ─────────────────────────── deletion guard ───────────────────────────
+
+_ALLOWED_HOST_PREFIXES = [
+    Path.home() / ".cache",
+    Path.home() / ".var" / "app",
+]
+
+def _is_allowed_host_target(p: Path) -> bool:
+    try:
+        rp = p.resolve()
+        for pref in _ALLOWED_HOST_PREFIXES:
+            if rp.is_relative_to(pref.resolve()):
+                return True
+    except Exception:
+        pass
+    return False
 
 
 # ─────────────────────────── UI ───────────────────────────
@@ -545,9 +586,25 @@ class SpruceWindow(Adw.ApplicationWindow):
         self.remove_btn.connect("clicked", self._on_remove_clicked)
         self.timeout_source = None
 
+        # Add a small "What's hidden?" button next to Remove
+        self.kept_btn = Gtk.Button(label="What’s hidden?")
+        self.kept_btn.set_has_frame(True)
+        self.kept_btn.set_valign(Gtk.Align.CENTER)
+        self.kept_btn.set_sensitive(False)
+        self.kept_btn.connect("clicked", self._on_show_kept_clicked)
+        try:
+            parent = self.remove_btn.get_parent()
+            if isinstance(parent, Gtk.Box):
+                parent.append(self.kept_btn)
+        except Exception:
+            pass
+
         # Options
         self._opts = {"thumbs": True, "webkit": True, "fontconf": True, "mesa": True, "sweep": True}
         self._current_toast = None
+
+        # Data for dialog
+        self._last_hidden: list[str] = []  # pinned + kept-for-safety combined
 
         # Initial UI
         self._refresh_autoremove_label()
@@ -560,14 +617,70 @@ class SpruceWindow(Adw.ApplicationWindow):
             GLib.source_remove(self.timeout_source)
             self.timeout_source = None
 
-        pkgs = list_flatpak_unused_with_diag(self)
-        if pkgs:
-            self.pkg_list.set_text(" ".join(pkgs))
-            self.remove_btn.set_sensitive(True)
-        else:
+        removable, pinned, kept = list_flatpak_unused_with_diag(self)
+        # Cache for dialog — combine pinned + kept into a single list
+        combined = []
+        seen = set()
+        for lst in (pinned, kept):
+            for r in lst:
+                if r not in seen:
+                    seen.add(r); combined.append(r)
+        self._last_hidden = combined
+
+        # Show ONLY the Removable list in the label
+        if not removable:
             self.pkg_list.set_text("Nothing unused to uninstall")
             self.remove_btn.set_sensitive(False)
+        else:
+            self.pkg_list.set_text("Removable: " + " ".join(removable))
+            self.remove_btn.set_sensitive(True)
+
+        # Enable the "What's hidden?" button if there is anything to show
+        self.kept_btn.set_sensitive(bool(self._last_hidden))
+
         return GLib.SOURCE_REMOVE
+
+    def _on_show_kept_clicked(self, _btn):
+        # Build a simple dialog listing hidden items (pinned or safety-kept)
+        dlg = Adw.Dialog.new()
+        dlg.set_title("Hidden items")
+        dlg.present(self)
+        dlg.set_content_width(560)
+        dlg.set_content_height(420)
+
+        header = Adw.HeaderBar()
+        v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        v.set_margin_top(12); v.set_margin_bottom(12); v.set_margin_start(12); v.set_margin_end(12)
+
+        intro = Gtk.Label(
+            label=("These items are hidden from removal because they’re either pinned by Flatpak "
+                   "or kept for safety (e.g., base Platforms/Locales, SDKs, or essential extensions)."),
+            xalign=0
+        )
+        intro.set_wrap(True)
+        v.append(intro)
+
+        sc = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
+        listbox = Gtk.ListBox(); listbox.set_selection_mode(Gtk.SelectionMode.NONE)
+        sc.set_child(listbox); v.append(sc)
+
+        title = Gtk.Label(label="Hidden (pinned or safety-kept)", xalign=0)
+        title.add_css_class("title-4")
+        listbox.append(title)
+
+        if not self._last_hidden:
+            listbox.append(Gtk.Label(label="— none —", xalign=0))
+        else:
+            for ref in self._last_hidden:
+                listbox.append(Adw.ActionRow(title=ref))
+
+        close_btn = Gtk.Button(label="Close")
+        close_btn.connect("clicked", lambda *_: dlg.close())
+        v.append(close_btn)
+
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        body.append(header); body.append(v)
+        dlg.set_child(body)
 
     def _on_remove_clicked(self, _btn):
         run_flatpak_autoremove_async(self._refresh_autoremove_label)
@@ -706,12 +819,12 @@ class SpruceWindow(Adw.ApplicationWindow):
 
         def do_rm(_b):
             removed = 0
-            host_targets: list[str] = []
+            host_targets: list[Path] = []
             for sw, p, can_delete, on_host in zip(toggles, paths, deletable, on_host_flags):
                 if not can_delete or not sw.get_active():
                     continue
                 if on_host:
-                    host_targets.append(str(p))
+                    host_targets.append(p)
                 else:
                     try:
                         if p.is_dir(): shutil.rmtree(p, ignore_errors=True)
@@ -721,7 +834,9 @@ class SpruceWindow(Adw.ApplicationWindow):
                         pass
             if host_targets:
                 for t in host_targets:
-                    _run(_host_exec("bash", "-lc", f'rm -rf -- "{t}"'))
+                    if not _is_allowed_host_target(t):
+                        continue  # safety: refuse out-of-scope deletions
+                    _run(_host_exec("rm", "-rf", str(t)))  # argv form; no shell
                 removed += len(host_targets)
 
             if removed:
