@@ -836,8 +836,14 @@ class SpruceWindow(Adw.ApplicationWindow):
                 for t in host_targets:
                     if not _is_allowed_host_target(t):
                         continue  # safety: refuse out-of-scope deletions
-                    _run(_host_exec("rm", "-rf", str(t)))  # argv form; no shell
-                removed += len(host_targets)
+                    # --- MODIFICATION START ---
+                    try:
+                        # Use shutil.rmtree for host deletion as an alternative to 'rm -rf'
+                        if t.is_dir(): shutil.rmtree(t, ignore_errors=True)
+                        else: t.unlink(missing_ok=True)
+                        removed += 1
+                    except Exception:
+                        pass
 
             if removed:
                 self._toast(f"Removed {removed} item(s)")
