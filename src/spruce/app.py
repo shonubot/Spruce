@@ -10,6 +10,7 @@ import re
 import math
 import shutil
 import sys
+import shlex
 from pathlib import Path
 from typing import List, Tuple
 
@@ -29,23 +30,51 @@ APP_ID = "io.github.shonubot.Spruce"
 IS_FLATPAK = Path("/.flatpak-info").exists()
 SPRUCE_DEBUG = os.environ.get("SPRUCE_DEBUG") == "1"
 
-
 # ─────────────────────────── helpers ───────────────────────────
 
 def _find_ui() -> str:
+    """
+    Locate window.ui across common layouts:
+      - explicit override via SPRUCE_UI_PATH
+      - Flatpak/system share dir: /app/share/io.github.shonubot.Spruce/ui/window.ui
+      - alt share dir:            /app/share/spruce/ui/window.ui
+      - prefix-based installs:    <sys.prefix>/share/<APP_ID>/ui/window.ui, etc
+      - repo/dev layouts:         <repo>/ui/window.ui
+      - site-packages (last):     <site>/spruce/ui/window.ui
+    """
+    override = os.environ.get("SPRUCE_UI_PATH")
+    if override and Path(override).is_file():
+        return override
+
     here = Path(__file__).resolve()
     prefix = Path(sys.prefix)
+
     candidates = [
-        here.parent.parent / "ui" / "window.ui",
-        Path.cwd() / "ui" / "window.ui",
-        prefix / "ui" / "window.ui",
+        # Flatpak / system installs (prefer these)
+        Path("/app/share") / APP_ID / "ui" / "window.ui",
+        Path("/app/share") / "spruce" / "ui" / "window.ui",
         prefix / "share" / APP_ID / "ui" / "window.ui",
         prefix / "share" / "spruce" / "ui" / "window.ui",
+
+        # Dev / repo checkouts
+        here.parent.parent / "ui" / "window.ui",  # repo root /ui/window.ui
+        here.parent / "ui" / "window.ui",         # package-relative ui/
+        Path.cwd() / "ui" / "window.ui",          # run-from-cwd
+
+        # Site-packages fallback (last)
+        (Path(sys.modules.get("spruce").__file__).parent / "ui" / "window.ui") if "spruce" in sys.modules else Path("/nonexistent")
     ]
+
     for p in candidates:
-        if p.exists():
-            return str(p)
-    return "ui/window.ui"
+        try:
+            if p.is_file():
+                return str(p)
+        except Exception:
+            pass
+
+    # Final fallback: helpful error path (so the exception shows something useful)
+    return str((prefix / "share" / APP_ID / "ui" / "window.ui"))
+
 
 
 def human_size(n: int) -> str:
@@ -56,6 +85,126 @@ def human_size(n: int) -> str:
             return f"{f:.0f}{u}" if u == "B" else f"{f:.1f}{u}"
         f /= 1024.0
     return f"{f:.1f}EiB"
+
+def xdg_cache() -> Path:
+    return Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
+
+# ─────────────────────────── subprocess helpers ───────────────────────────
+
+def _host_exec(*argv: str) -> list[str]:
+    return ["flatpak-spawn", "--host", *argv] if IS_FLATPAK else list(argv)
+
+def _run(argv: list[str], stdin_text: str | None = None) -> tuple[int, str, str]:
+    """Run a command with Gio.Subprocess and capture stdout/stderr (UTF-8)."""
+    try:
+        flags = Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
+        if stdin_text is not None:
+            flags |= Gio.SubprocessFlags.STDIN_PIPE
+        sp = Gio.Subprocess.new(argv, flags)
+        ok, out, err = sp.communicate_utf8(stdin_text, None)
+        if ok:
+            return 0, out or "", err or ""
+        code = sp.get_exit_status()
+        return code, out or "", err or ""
+    except Exception as e:
+        return 127, "", str(e)
+
+# ─────────────────────────── host helpers (sizes & deletion) ───────────────────────────
+
+def _host_list_size_lines(cmd: str) -> list[tuple[str, int]]:
+    """Run a host shell pipeline that prints 'SIZE PATH' per line → [(path, size)]."""
+    code, out, _ = _run(_host_exec("bash", "-lc", cmd))
+    items: list[tuple[str, int]] = []
+    if code == 0 and out.strip():
+        for ln in out.splitlines():
+            parts = ln.strip().split(None, 1)
+            if len(parts) == 2 and parts[0].isdigit():
+                items.append((parts[1], int(parts[0])))
+    return items
+
+def _host_rm_rf(path: Path) -> bool:
+    """Delete a host path via rm -rf (guarded by _is_allowed_host_target)."""
+    if not _is_allowed_host_target(path):
+        return False
+    cmd = f"rm -rf -- {shlex.quote(str(path))}"
+    code, _, _ = _run(_host_exec("bash", "-lc", cmd))
+    return code == 0
+
+# ─────────────────────────── disk usage (prefer host) ───────────────────────────
+
+def _disk_usage_home_host() -> Tuple[int, int, int] | None:
+    """Return (total, used, free) for $HOME from the host using multiple fallbacks."""
+    # 1) Prefer df with explicit bytes
+    code, out, _ = _run(_host_exec("bash", "-lc",
+        'LANG=C df -B1 -P --output=size,used,avail "$HOME" | tail -n1'))
+    if code == 0 and out.strip():
+        parts = out.split()
+        if len(parts) >= 3:
+            try:
+                total, used, free = int(parts[0]), int(parts[1]), int(parts[2])
+                if total > 0:
+                    return total, used, free
+            except Exception:
+                pass
+
+    # 2) Fallback to df -Pk (1K blocks → multiply by 1024)
+    code, out, _ = _run(_host_exec("bash", "-lc",
+        'LANG=C df -Pk --output=size,used,avail "$HOME" | tail -n1'))
+    if code == 0 and out.strip():
+        parts = out.split()
+        if len(parts) >= 3:
+            try:
+                total, used, free = (int(parts[0]) * 1024,
+                                     int(parts[1]) * 1024,
+                                     int(parts[2]) * 1024)
+                if total > 0:
+                    return total, used, free
+            except Exception:
+                pass
+
+    # 3) Fallback to stat -f (block size * counts)
+    code, out, _ = _run(_host_exec("bash", "-lc",
+        'stat -f --format="%S %b %a" "$HOME"'))
+    if code == 0 and out.strip():
+        parts = out.split()
+        if len(parts) >= 3:
+            try:
+                bsize = int(parts[0]); blocks = int(parts[1]); avail = int(parts[2])
+                total = bsize * blocks
+                free = bsize * avail
+                used = max(0, total - free)
+                if total > 0:
+                    return total, used, free
+            except Exception:
+                pass
+    return None
+
+def disk_usage_home() -> Tuple[int, int, int]:
+    # Prefer authoritative host numbers when sandboxed
+    if IS_FLATPAK:
+        host = _disk_usage_home_host()
+        if host:
+            return host
+    # Fallbacks (sandbox view)
+    p = Path.home()
+    try:
+        info = Gio.File.new_for_path(str(p)).query_filesystem_info(
+            "filesystem::size,filesystem::free", None
+        )
+        total = int(info.get_attribute_uint64("filesystem::size"))
+        free = int(info.get_attribute_uint64("filesystem::free"))
+        used = max(0, total - free)
+        if total > 0:
+            return total, used, free
+    except Exception:
+        pass
+    try:
+        total, used, free = shutil.disk_usage(str(p))
+        if total > 0:
+            return int(total), int(used), int(free)
+    except Exception:
+        pass
+    return 1, 0, 1
 
 
 def _gio_fs_usage(path: Path) -> Tuple[int, int, int] | None:
@@ -72,8 +221,13 @@ def _gio_fs_usage(path: Path) -> Tuple[int, int, int] | None:
         pass
     return None
 
-
 def disk_usage_home() -> Tuple[int, int, int]:
+    # Prefer authoritative host numbers when sandboxed
+    if IS_FLATPAK:
+        host = _disk_usage_home_host()
+        if host:
+            return host
+    # Fallbacks (sandbox view)
     p = Path.home()
     ans = _gio_fs_usage(p)
     if ans:
@@ -86,60 +240,12 @@ def disk_usage_home() -> Tuple[int, int, int]:
         pass
     return 1, 0, 1
 
-
-def xdg_cache() -> Path:
-    return Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
-
-
-# ─────────────────────────── subprocess helpers (Gio) ───────────────────────────
-
-def _host_exec(*argv: str) -> list[str]:
-    return ["flatpak-spawn", "--host", *argv] if IS_FLATPAK else list(argv)
-
-def _run(argv: list[str], stdin_text: str | None = None) -> tuple[int, str, str]:
-    """Run a command with Gio.Subprocess and capture stdout/stderr (UTF-8)."""
-    try:
-        flags = Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
-        if stdin_text is not None:
-            flags |= Gio.SubprocessFlags.STDIN_PIPE
-        sp = Gio.Subprocess.new(argv, flags)
-        ok, out, err = sp.communicate_utf8(stdin_text, None)
-        if ok:
-            return 0, out or "", err or ""
-        try:
-            code = sp.get_exit_status()
-        except Exception:
-            code = 1
-        return code, out or "", err or ""
-    except Exception as e:
-        return 127, "", str(e)
-
-
-# ─────────────────── diagnostics to UI (debug-only) ───────────────────
-
-def _append_diag(win: Gtk.Widget | None, lines: list[str]) -> None:
-    if not SPRUCE_DEBUG:
-        return  # quiet unless explicitly enabled
-    try:
-        app = Gtk.Application.get_default()
-        w = (app.props.active_window if app else None) or win  # type: ignore
-        if not w or not hasattr(w, "pkg_list"):
-            return
-        lbl: Gtk.Label = getattr(w, "pkg_list")  # type: ignore
-        cur = lbl.get_text()
-        text = "\n".join(lines)
-        lbl.set_text((cur + "\n" if cur else "") + text)
-    except Exception:
-        pass
-
-
-# ─────────────────────────── flatpak logic ───────────────────────────
+# ─────────────────────────── Flatpak discovery (unused runtimes) ───────────────────────────
 
 APP_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+(?:\.[A-Za-z0-9_.-]+)+$")
 RUNTIME_LINE_RE = re.compile(r"^Runtime:\s*(.+?)\s*$", re.IGNORECASE)
 
 def _host_list_apps(scope: str) -> list[str]:
-    # Prefer columns API
     code, out, _ = _run(_host_exec("flatpak", "list", "--app", scope, "--columns=application"))
     apps: list[str] = []
     if code == 0 and out.strip():
@@ -147,7 +253,6 @@ def _host_list_apps(scope: str) -> list[str]:
             app = ln.strip()
             if APP_ID_RE.match(app):
                 apps.append(app)
-    # Fallback parse
     if not apps:
         code2, out2, err2 = _run(_host_exec("flatpak", "list", "--app", scope))
         text = out2 if code2 == 0 else err2
@@ -156,7 +261,6 @@ def _host_list_apps(scope: str) -> list[str]:
                 if APP_ID_RE.match(tok):
                     apps.append(tok); break
     return apps
-
 
 def _host_runtime_of_app(app_id: str, scope: str) -> str | None:
     code, out, err = _run(_host_exec("flatpak", "info", app_id, scope))
@@ -168,17 +272,13 @@ def _host_runtime_of_app(app_id: str, scope: str) -> str | None:
             return r if r.startswith("runtime/") else f"runtime/{r}"
     return None
 
-
 def _list_runtime_refs_via_flatpak(scope: str) -> list[str]:
-    """Prefer authoritative list from Flatpak itself."""
     code, out, _ = _run(_host_exec("flatpak", "list", "--runtime", scope, "--columns=ref"))
     refs: list[str] = []
     if code == 0 and out.strip():
         refs = [ln.strip() for ln in out.splitlines() if ln.strip()]
         refs = [r if r.startswith("runtime/") else f"runtime/{r}" for r in refs]
         return sorted(set(refs))
-
-    # Older fallback: parse table output
     code2, out2, err2 = _run(_host_exec("flatpak", "list", "--runtime", scope))
     text = out2 if code2 == 0 else err2
     for ln in text.splitlines():
@@ -189,15 +289,11 @@ def _list_runtime_refs_via_flatpak(scope: str) -> list[str]:
                 refs.append(t if t.startswith("runtime/") else f"runtime/{t}")
     return sorted(set(refs))
 
-
 def _host_installed_runtime_refs(scope: str) -> list[str]:
-    """Get installed runtime refs for --user or --system."""
-    # 1) Ask flatpak
     refs = _list_runtime_refs_via_flatpak(scope)
     if refs:
         return [r for r in refs if r.startswith("runtime/")]
-
-    # 2) Pure-Python fallback: walk runtime dirs
+    # very defensive fallback scanning host FS
     roots: list[Path] = []
     if scope == "--user":
         roots.append(Path.home() / ".local" / "share" / "flatpak" / "runtime")
@@ -205,30 +301,22 @@ def _host_installed_runtime_refs(scope: str) -> list[str]:
         roots.append(vhome / ".local" / "share" / "flatpak" / "runtime")
     else:
         roots.append(Path("/var/lib/flatpak/runtime"))
-
     results: set[str] = set()
     for root in roots:
-        if not root.is_dir():
-            continue
+        if not root.is_dir(): continue
         try:
             for name_dir in root.iterdir():
-                if not name_dir.is_dir():
-                    continue
+                if not name_dir.is_dir(): continue
                 for arch_dir in name_dir.iterdir():
-                    if not arch_dir.is_dir():
-                        continue
+                    if not arch_dir.is_dir(): continue
                     for br_dir in arch_dir.iterdir():
-                        if not br_dir.is_dir():
-                            continue
+                        if not br_dir.is_dir(): continue
                         name, arch, br = name_dir.name, arch_dir.name, br_dir.name
                         results.add(f"runtime/{name}/{arch}/{br}")
         except Exception:
             pass
-
     return sorted(results)
 
-
-# Safety settings
 _ALWAYS_KEEP_EXT_SUFFIXES = (".GL.default", ".codecs", ".codecs-extra", ".openh264")
 
 def _is_always_kept_extension(ref: str) -> bool:
@@ -265,23 +353,15 @@ def _platform_from_ext(ref: str) -> str:
     return ".".join(parts[:3]) if len(parts) >= 3 else name
 
 def _sdk_to_platform_name(sdk_name: str) -> str:
-    # org.gnome.Sdk -> org.gnome.Platform (keep same first 3 components)
     parts = sdk_name.split(".")
     if len(parts) >= 3:
         return ".".join(parts[:3]) + ".Platform"
     return sdk_name.replace(".Sdk", ".Platform")
 
-
 _PIN_COMMENT_RE = re.compile(r"#.*$")
 
 def _list_pins(scope: str) -> set[str]:
-    """
-    Return pinned refs for --user/--system.
-    Prefer `flatpak pin --list`; otherwise parse pinned/ files in pure Python.
-    """
     pins: set[str] = set()
-
-    # 1) Try newer CLI
     code, out, _ = _run(_host_exec("flatpak", "pin", "--list", scope))
     if code == 0 and out.strip():
         for ln in out.splitlines():
@@ -289,14 +369,11 @@ def _list_pins(scope: str) -> set[str]:
             if ref:
                 pins.add(ref if ref.startswith("runtime/") else f"runtime/{ref}")
         return pins
-
-    # 2) Pure-Python fallback
+    # defensive fallback
     pin_dir = (Path.home() / ".local/share/flatpak/pinned"
                if scope == "--user" else Path("/var/lib/flatpak/pinned"))
     if not pin_dir.is_dir():
         return pins
-
-    # A) file names that look like refs
     try:
         for p in sorted(pin_dir.iterdir(), key=lambda q: q.name.lower()):
             bn = p.name
@@ -309,8 +386,6 @@ def _list_pins(scope: str) -> set[str]:
                 pins.add(bn if bn.startswith("runtime/") else f"runtime/{bn}")
     except Exception:
         pass
-
-    # B) file contents (strip comments/whitespace; skip blank)
     try:
         for p in sorted(pin_dir.iterdir(), key=lambda q: q.name.lower()):
             if not p.is_file():
@@ -330,16 +405,11 @@ def _list_pins(scope: str) -> set[str]:
                     pins.add(line)
     except Exception:
         pass
-
     return pins
 
-
 def _installed_sdk_refs(scope: str) -> list[str]:
-    """Return installed SDK refs (and Sdk.Locale) for scope."""
     refs = _host_installed_runtime_refs(scope)
-    sdks = [r for r in refs if _is_sdk_family(r)]
-    return sdks
-
+    return [r for r in refs if _is_sdk_family(r)]
 
 def list_flatpak_unused_with_diag(win: Gtk.Widget) -> tuple[list[str], list[str], list[str]]:
     """
@@ -368,14 +438,13 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> tuple[list[str], list[str]
         if not refs:
             continue
 
-        # Determine platform bases used by apps (and implied by SDKs)
         used_platform_bases = set()
         for a in apps:
             r = _host_runtime_of_app(a, scope)
             if r:
                 used_platform_bases.add(_base_of(r)[0])
         for sdk_ref in sdks:
-            sdk_name, arch, br = _base_of(sdk_ref)
+            sdk_name, _arch, _br = _base_of(sdk_ref)
             platform_name = _sdk_to_platform_name(sdk_name)
             used_platform_bases.add(platform_name)
 
@@ -383,32 +452,18 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> tuple[list[str], list[str]
             diag.append(f"{scope} used platform bases: {sorted(used_platform_bases)}")
 
         for ref in refs:
-            # First: if pinned, surface in pinned list (regardless of safety filters)
             if ref in pins:
-                pinned_all.append(ref)
-                continue
-
-            # Now compute safety status and “unused by our rules”
+                pinned_all.append(ref); continue
             is_sdk = _is_sdk_family(ref)
             is_platform = _is_platform_family(ref)
             is_always_kept = _is_always_kept_extension(ref)
-
-            # Decide the base name for extension matching
             base_name = _base_of(ref)[0] if _is_base_runtime(ref) else _platform_from_ext(ref)
-
-            # If this runtime/extension is actually used by an app/SDK-implied platform, skip entirely
             if base_name in used_platform_bases:
                 continue
-
-            # If it’s one of the safety-kept types, list it under “Kept for safety”
             if is_sdk or is_platform or is_always_kept:
-                kept_all.append(ref)
-                continue
-
-            # Otherwise it’s removable by our rules
+                kept_all.append(ref); continue
             removable_all.append(ref)
 
-    # de-dup while preserving order
     def dedup(seq: list[str]) -> list[str]:
         seen = set(); out = []
         for r in seq:
@@ -423,14 +478,22 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> tuple[list[str], list[str]
     diag.append(f"unused refs (removable): {removable}")
     diag.append(f"unused refs (pinned): {pinned}")
     diag.append(f"unused refs (kept): {kept}")
-    _append_diag(win, diag)
+    if SPRUCE_DEBUG:
+        app = Gtk.Application.get_default()
+        w = app.props.active_window if app else None
+        if w and hasattr(w, "pkg_list"):
+            try:
+                lbl: Gtk.Label = getattr(w, "pkg_list")  # type: ignore
+                cur = lbl.get_text()
+                lbl.set_text((cur + "\n" if cur else "") + "\n".join(diag))
+            except Exception:
+                pass
     return removable, pinned, kept
-
 
 def run_flatpak_autoremove_async(on_done) -> None:
     """Run flatpak uninstall --unused for user+system and toast the result."""
     def _run_and_count(scope: str) -> int:
-        code, out, err = _run(_host_exec("flatpak", "uninstall", "--unused", scope, "-y"))
+        code, out, _err = _run(_host_exec("flatpak", "uninstall", "--unused", scope, "-y"))
         return sum(1 for ln in (out or "").splitlines() if ln.strip().startswith("Uninstalling "))
 
     removed = 0
@@ -453,74 +516,38 @@ def run_flatpak_autoremove_async(on_done) -> None:
 
     GLib.timeout_add_seconds(1, _after)
 
-
-# ─────────────────────────── cache sweep ───────────────────────────
-
-def dir_size(path: Path) -> int:
-    total = 0
-    if path.is_dir():
-        for root, _dirs, files in os.walk(path, onerror=lambda *_: None):
-            for f in files:
-                try:
-                    total += (Path(root) / f).stat().st_size
-                except Exception:
-                    pass
-    elif path.exists():
-        try:
-            total += path.stat().st_size
-        except Exception:
-            pass
-    return total
-
-
-def _du_host_bytes(path: str) -> int:
-    p = Path(path)
-    total = 0
-    try:
-        if p.is_dir():
-            for root, _dirs, files in os.walk(p, onerror=lambda *_: None):
-                for f in files:
-                    try:
-                        total += (Path(root) / f).stat().st_size
-                    except Exception:
-                        pass
-        elif p.exists():
-            total = p.stat().st_size
-    except Exception:
-        total = 0
-    return total
-
+# ─────────────────────────── cache enumeration ───────────────────────────
 
 def _host_first_level_cache_entries() -> list[tuple[str, int]]:
-    """First-level children of $HOME/.cache with sizes (pure Python)."""
-    root = Path.home() / ".cache"
-    if not root.is_dir():
-        return []
-    entries: list[tuple[str, int]] = []
-    try:
-        for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
-            entries.append((str(child), _du_host_bytes(str(child))))
-    except Exception:
-        pass
-    entries.sort(key=lambda t: t[1], reverse=True)
-    return entries
+    """Host cache top-level entries: consider both $HOME/.cache and $XDG_CACHE_HOME."""
+    cmd = r'''
+root1="${HOME}/.cache"
+root2="${XDG_CACHE_HOME:-}"
+print_one_root() {
+  local r="$1"
+  [ -n "$r" ] && [ -d "$r" ] || return 0
+  find "$r" -mindepth 1 -maxdepth 1 -print0
+}
+# Collect candidates from both roots, de-dup, then size them
+{ print_one_root "$root1"; print_one_root "$root2"; } \
+  | awk -v RS='\0' '!seen[$0]++{print $0}' ORS='\0' \
+  | xargs -0 -I{} du -sb "{}" 2>/dev/null \
+  | sort -nr
+'''
+    return _host_list_size_lines(cmd)
 
 
 def _host_app_cache_entries() -> list[tuple[str, int]]:
-    """Top-level Flatpak app caches (~/.var/app/*/cache) on host (pure Python)."""
-    base = Path.home() / ".var" / "app"
-    if not base.is_dir():
-        return []
-    out: list[tuple[str, int]] = []
-    try:
-        for appdir in sorted(base.iterdir(), key=lambda p: p.name.lower()):
-            c = appdir / "cache"
-            if c.is_dir():
-                out.append((str(c), _du_host_bytes(str(c))))
-    except Exception:
-        pass
-    out.sort(key=lambda t: t[1], reverse=True)
-    return out
+    """Host ~/.var/app/*/cache with sizes via host du -sb."""
+    cmd = r'''
+base="${HOME}/.var/app"
+if [ -d "$base" ]; then
+  find "$base" -mindepth 2 -maxdepth 2 -type d -name cache -print0 \
+  | xargs -0 -I{} du -sb "{}" 2>/dev/null \
+  | sort -nr
+fi
+'''
+    return _host_list_size_lines(cmd)
 
 
 def _sandbox_first_level_cache_entries() -> list[tuple[Path, int]]:
@@ -531,17 +558,25 @@ def _sandbox_first_level_cache_entries() -> list[tuple[Path, int]]:
         return result
     for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
         try:
-            result.append((child, dir_size(child)))
+            size = 0
+            if child.is_dir():
+                for f in child.rglob('*'):
+                    try:
+                        if f.is_file():
+                            size += f.stat().st_size
+                    except Exception:
+                        pass
+            else:
+                size = child.stat().st_size
+            result.append((child, size))
         except Exception:
             pass
     result.sort(key=lambda t: t[1], reverse=True)
     return result
 
-
 def _host_cache_paths_and_sizes() -> list[tuple[str, int]]:
     """Compatibility shim: host ~/.cache/* + ~/.var/app/*/cache."""
     return _host_first_level_cache_entries() + _host_app_cache_entries()
-
 
 # ─────────────────────────── deletion guard ───────────────────────────
 
@@ -559,7 +594,6 @@ def _is_allowed_host_target(p: Path) -> bool:
     except Exception:
         pass
     return False
-
 
 # ─────────────────────────── UI ───────────────────────────
 
@@ -839,14 +873,8 @@ class SpruceWindow(Adw.ApplicationWindow):
                 for t in host_targets:
                     if not _is_allowed_host_target(t):
                         continue  # safety: refuse out-of-scope deletions
-                    # --- MODIFICATION START ---
-                    try:
-                        # Use shutil.rmtree for host deletion as an alternative to 'rm -rf'
-                        if t.is_dir(): shutil.rmtree(t, ignore_errors=True)
-                        else: t.unlink(missing_ok=True)
+                    if _host_rm_rf(t):
                         removed += 1
-                    except Exception:
-                        pass
 
             if removed:
                 self._toast(f"Removed {removed} item(s)")
@@ -854,6 +882,8 @@ class SpruceWindow(Adw.ApplicationWindow):
             dlg.close()
 
         rm_btn.connect("clicked", do_rm)
+        actions.set_halign(Gtk.Align.START)
+        v.append(actions)
 
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         body.append(header); body.append(v)
@@ -913,7 +943,6 @@ class SpruceWindow(Adw.ApplicationWindow):
         dlg.add_response("ok", "OK"); dlg.set_default_response("ok"); dlg.present(self)
         return dlg
 
-
 # ─────────────────────────── app ───────────────────────────
 
 class SpruceApp(Adw.Application):
@@ -923,10 +952,8 @@ class SpruceApp(Adw.Application):
     def do_activate(self):
         (self.props.active_window or SpruceWindow(application=self)).present()
 
-
 def main() -> int:
     return SpruceApp().run([])
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
