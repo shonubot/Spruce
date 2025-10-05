@@ -9,6 +9,7 @@ import os
 import re
 import math
 import shutil
+import sys
 from pathlib import Path
 from typing import List, Tuple
 
@@ -25,7 +26,7 @@ except Exception:
     cairo = None
 
 APP_ID = "io.github.shonubot.Spruce"
-IS_FLATPAK = os.environ.get("FLATPAK_ID") == APP_ID
+IS_FLATPAK = Path("/.flatpak-info").exists()
 SPRUCE_DEBUG = os.environ.get("SPRUCE_DEBUG") == "1"
 
 
@@ -33,13 +34,15 @@ SPRUCE_DEBUG = os.environ.get("SPRUCE_DEBUG") == "1"
 
 def _find_ui() -> str:
     here = Path(__file__).resolve()
-    for p in [
+    prefix = Path(sys.prefix)
+    candidates = [
         here.parent.parent / "ui" / "window.ui",
         Path.cwd() / "ui" / "window.ui",
-        Path("/app/ui/window.ui"),
-        Path("/app/share/io.github.shonubot.Spruce/ui/window.ui"),
-        Path("/app/share/spruce/ui/window.ui"),
-    ]:
+        prefix / "ui" / "window.ui",
+        prefix / "share" / APP_ID / "ui" / "window.ui",
+        prefix / "share" / "spruce" / "ui" / "window.ui",
+    ]
+    for p in candidates:
         if p.exists():
             return str(p)
     return "ui/window.ui"
