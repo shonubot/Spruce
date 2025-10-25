@@ -14,20 +14,6 @@ It helps keep your system fresh by clearing unneeded caches, logs, and temporary
 
 ---
 
-### Installation
-
-#### From source
-
-```bash
-git clone https://github.com/shonubot/Spruce.git
-cd Spruce
-meson setup build
-meson compile -C build
-sudo meson install -C build
-```
-
----
-
 ### Usage
 
 Launch **Spruce** from your app menu or by running:
