@@ -111,24 +111,134 @@ def _run(argv: list[str], stdin_text: str | None = None) -> tuple[int, str, str]
 
 # ─────────────────────────── host helpers (sizes & deletion) ───────────────────────────
 
-def _host_list_size_lines(cmd: str) -> list[tuple[str, int]]:
-    """Run a host shell pipeline that prints 'SIZE PATH' per line → [(path, size)]."""
-    code, out, _ = _run(_host_exec("bash", "-lc", cmd))
-    items: list[tuple[str, int]] = []
+def _host_list_dirs_with_sizes(base: Path) -> list[tuple[str, int]]:
+    """Enumerate first-level subdirs under `base` on the host and return [(path, size)]."""
+    if not IS_FLATPAK:
+        if not base.exists():
+            return []
+        result = []
+        for child in base.iterdir():
+            try:
+                if not child.exists():
+                    continue
+                size = 0
+                if child.is_dir():
+                    for f in child.rglob('*'):
+                        try:
+                            if f.is_file():
+                                size += f.stat().st_size
+                        except Exception:
+                            pass
+                else:
+                    size = child.stat().st_size
+                result.append((str(child), size))
+            except Exception:
+                pass
+        return sorted(result, key=lambda t: t[1], reverse=True)
+
+# Script is needed to reduce permissions and only need flatpak-spawn --host
+# The Script cannot run directly in the app
+# It needs to be run through flatpak-spawn --host
+# But it is python itself
+    script = f"""
+import os, sys
+from pathlib import Path
+base = Path(os.path.expandvars({repr(str(base))}))
+if not base.is_dir():
+    sys.exit(0)
+for child in base.iterdir():
+    try:
+        if not child.exists():
+            continue
+        size = 0
+        if child.is_dir():
+            for f in child.rglob('*'):
+                try:
+                    if f.is_file():
+                        size += f.stat().st_size
+                except Exception:
+                    pass
+        else:
+            size = child.stat().st_size
+        print(f"{{size}} {{child}}")
+    except Exception:
+        pass
+"""
+    code, out, _ = _run(_host_exec("python3", "-c", script))
+    result = []
     if code == 0 and out.strip():
         for ln in out.splitlines():
             parts = ln.strip().split(None, 1)
             if len(parts) == 2 and parts[0].isdigit():
-                items.append((parts[1], int(parts[0])))
-    return items
+                result.append((parts[1], int(parts[0])))
+    return sorted(result, key=lambda t: t[1], reverse=True)
+
+
+def _host_first_level_cache_entries() -> list[tuple[str, int]]:
+    """Host ~/.cache and $XDG_CACHE_HOME top-level entries."""
+    results = []
+    home = Path.home()
+    roots = [home / ".cache"]
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    if xdg:
+        roots.append(Path(xdg))
+    seen = set()
+    for root in roots:
+        for path, size in _host_list_dirs_with_sizes(root):
+            if path not in seen:
+                seen.add(path)
+                results.append((path, size))
+    return results
+
+
+def _host_app_cache_entries() -> list[tuple[str, int]]:
+    """Host ~/.var/app/*/cache directories."""
+    base = Path.home() / ".var" / "app"
+    if not IS_FLATPAK:
+        results = []
+        if base.exists():
+            for appdir in base.iterdir():
+                cdir = appdir / "cache"
+                if cdir.is_dir():
+                    sz = sum(f.stat().st_size for f in cdir.rglob("*") if f.is_file())
+                    results.append((str(cdir), sz))
+        return sorted(results, key=lambda t: t[1], reverse=True)
+
+    script = """
+import os, sys
+from pathlib import Path
+base = Path.home() / '.var' / 'app'
+if not base.is_dir():
+    sys.exit(0)
+for appdir in base.iterdir():
+    cdir = appdir / 'cache'
+    if cdir.is_dir():
+        size = 0
+        for f in cdir.rglob('*'):
+            try:
+                if f.is_file():
+                    size += f.stat().st_size
+            except Exception:
+                pass
+        print(f"{size} {cdir}")
+"""
+    code, out, _ = _run(_host_exec("python3", "-c", script))
+    results = []
+    if code == 0 and out.strip():
+        for ln in out.splitlines():
+            parts = ln.strip().split(None, 1)
+            if len(parts) == 2 and parts[0].isdigit():
+                results.append((parts[1], int(parts[0])))
+    return sorted(results, key=lambda t: t[1], reverse=True)
+
 
 def _host_rm_rf(path: Path) -> bool:
     """Delete a host path via rm -rf (guarded by _is_allowed_host_target)."""
     if not _is_allowed_host_target(path):
         return False
-    cmd = f"rm -rf -- {shlex.quote(str(path))}"
-    code, _, _ = _run(_host_exec("bash", "-lc", cmd))
+    code, _, _ = _run(_host_exec("rm", "-rf", str(path)))
     return code == 0
+
 
 # ─────────────────────────── disk usage (prefer host) ───────────────────────────
 
@@ -518,36 +628,7 @@ def run_flatpak_autoremove_async(on_done) -> None:
 
 # ─────────────────────────── cache enumeration ───────────────────────────
 
-def _host_first_level_cache_entries() -> list[tuple[str, int]]:
-    """Host cache top-level entries: consider both $HOME/.cache and $XDG_CACHE_HOME."""
-    cmd = r'''
-root1="${HOME}/.cache"
-root2="${XDG_CACHE_HOME:-}"
-print_one_root() {
-  local r="$1"
-  [ -n "$r" ] && [ -d "$r" ] || return 0
-  find "$r" -mindepth 1 -maxdepth 1 -print0
-}
-# Collect candidates from both roots, de-dup, then size them
-{ print_one_root "$root1"; print_one_root "$root2"; } \
-  | awk -v RS='\0' '!seen[$0]++{print $0}' ORS='\0' \
-  | xargs -0 -I{} du -sb "{}" 2>/dev/null \
-  | sort -nr
-'''
-    return _host_list_size_lines(cmd)
 
-
-def _host_app_cache_entries() -> list[tuple[str, int]]:
-    """Host ~/.var/app/*/cache with sizes via host du -sb."""
-    cmd = r'''
-base="${HOME}/.var/app"
-if [ -d "$base" ]; then
-  find "$base" -mindepth 2 -maxdepth 2 -type d -name cache -print0 \
-  | xargs -0 -I{} du -sb "{}" 2>/dev/null \
-  | sort -nr
-fi
-'''
-    return _host_list_size_lines(cmd)
 
 
 def _sandbox_first_level_cache_entries() -> list[tuple[Path, int]]:
