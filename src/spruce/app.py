@@ -574,6 +574,12 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> tuple[list[str], list[str]
                 kept_all.append(ref); continue
             removable_all.append(ref)
 
+            # Skip known extension packs like KStyle, icon themes, codecs, etc.
+            if "KStyle." in ref or ".IconThemes" in ref or "Adwaita" in ref:
+                kept_all.append(ref)
+                continue
+
+
     def dedup(seq: list[str]) -> list[str]:
         seen = set(); out = []
         for r in seq:
