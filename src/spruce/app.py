@@ -876,23 +876,31 @@ class SpruceWindow(Adw.ApplicationWindow):
           • host ~/.var/app/*/cache  (one entry per app cache)
           • sandbox XDG_CACHE/* (each first-level item)
         """
-        entries: list[tuple[Path, int, bool, bool]] = []
+        entries: list[tuple[Path, int, bool, bool, str]] = []
 
+        # Host ~/.cache/*
         for apath, sz in _host_first_level_cache_entries():
-            entries.append((Path(apath), sz, True, True))
+            p = Path(apath)
+            entries.append((p, sz, True, True, p.name))
 
+        # Host ~/.var/app/*/cache — label by app ID
         for apath, sz in _host_app_cache_entries():
-            entries.append((Path(apath), sz, True, True))
+            p = Path(apath)
+            app_name = p.parent.name if p.name == "cache" else p.name
+            entries.append((p, sz, True, True, app_name))
 
+        # Sandbox ~/.cache/*
         for p, sz in _sandbox_first_level_cache_entries():
-            entries.append((p, sz, True, False))
+            entries.append((p, sz, True, False, p.name))
 
         GLib.idle_add(self._show_sweep_dialog, entries)
         return None
 
-    def _show_sweep_dialog(self, entries: list[tuple[Path, int, bool, bool]]):
+
+    def _show_sweep_dialog(self, entries: list[tuple[Path, int, bool, bool, str]]):
         if self._current_toast:
-            self._current_toast.close(); self._current_toast = None
+            self._current_toast.close()
+            self._current_toast = None
 
         dlg = Adw.Dialog.new()
         dlg.set_title("Cache sweep")
@@ -902,32 +910,46 @@ class SpruceWindow(Adw.ApplicationWindow):
 
         header = Adw.HeaderBar()
         v = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        v.set_margin_top(12); v.set_margin_bottom(12); v.set_margin_start(12); v.set_margin_end(12)
+        v.set_margin_top(12)
+        v.set_margin_bottom(12)
+        v.set_margin_start(12)
+        v.set_margin_end(12)
 
         title = Gtk.Label(label="Select the cache files to remove:", xalign=0)
-        title.add_css_class("title-4"); v.append(title)
+        title.add_css_class("title-4")
+        v.append(title)
 
         sc = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
-        listbox = Gtk.ListBox(); listbox.set_selection_mode(Gtk.SelectionMode.NONE)
-        sc.set_child(listbox); v.append(sc)
+        listbox = Gtk.ListBox()
+        listbox.set_selection_mode(Gtk.SelectionMode.NONE)
+        sc.set_child(listbox)
+        v.append(sc)
 
         toggles: List[Gtk.Switch] = []
         paths: List[Path] = []
         deletable: List[bool] = []
         on_host_flags: List[bool] = []
 
-        for p, sz, can_delete, on_host in entries:
+        for p, sz, can_delete, on_host, display_name in entries:
             loc = "host" if on_host else "sandbox"
-            row = Adw.ActionRow(title=p.name, subtitle=f"{p} ({loc}) — {human_size(sz)}")
+            row = Adw.ActionRow(
+                title=display_name,
+                subtitle=f"{p} ({loc}) — {human_size(sz)}"
+            )
             sw = Gtk.Switch(valign=Gtk.Align.CENTER, sensitive=can_delete)
             row.add_suffix(sw)
             listbox.append(row)
-            toggles.append(sw); paths.append(p); deletable.append(can_delete); on_host_flags.append(on_host)
+            toggles.append(sw)
+            paths.append(p)
+            deletable.append(can_delete)
+            on_host_flags.append(on_host)
 
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         sel_all = Gtk.CheckButton(label="Select all")
         rm_btn = Gtk.Button(label="Remove selected", sensitive=False)
-        actions.append(sel_all); actions.append(rm_btn); v.append(actions)
+        actions.append(sel_all)
+        actions.append(rm_btn)
+        v.append(actions)
 
         def update_btn(*_a):
             rm_btn.set_sensitive(any(s.get_active() and s.get_sensitive() for s in toggles))
@@ -951,8 +973,10 @@ class SpruceWindow(Adw.ApplicationWindow):
                     host_targets.append(p)
                 else:
                     try:
-                        if p.is_dir(): shutil.rmtree(p, ignore_errors=True)
-                        else: p.unlink(missing_ok=True)
+                        if p.is_dir():
+                            shutil.rmtree(p, ignore_errors=True)
+                        else:
+                            p.unlink(missing_ok=True)
                         removed += 1
                     except Exception:
                         pass
@@ -973,8 +997,10 @@ class SpruceWindow(Adw.ApplicationWindow):
         v.append(actions)
 
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        body.append(header); body.append(v)
+        body.append(header)
+        body.append(v)
         dlg.set_child(body)
+
 
     # ─────────────── pie chart ───────────────
 

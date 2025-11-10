@@ -138,13 +138,6 @@ corresponding .blp file and regenerate this file with blueprint-compiler.
                         <property name="activatable">false</property>
                       </object>
                     </child>
-                    <child>
-                      <object class="AdwActionRow">
-                        <property name="title">Privacy</property>
-                        <property name="subtitle">Recently used list</property>
-                        <property name="activatable">false</property>
-                      </object>
-                    </child>
                   </object>
                 </child>
               </object>
