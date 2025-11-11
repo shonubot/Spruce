@@ -524,8 +524,12 @@ def _installed_sdk_refs(scope: str) -> list[str]:
 def list_flatpak_unused_with_diag(win: Gtk.Widget) -> tuple[list[str], list[str], list[str]]:
     """
     Return (removable_refs, pinned_refs, kept_refs) after applying rules.
-    - pinned_refs: anything pinned (shown, not removable)
-    - kept_refs: safety-kept items (Platform/Locale, always-kept extensions, SDKs)
+
+    - pinned_refs: anything explicitly pinned by Flatpak (never removable)
+    - kept_refs: safety-kept items (base Platforms/Locales, SDKs, extensions, etc.)
+    - removable_refs: unused runtimes or SDKs not required by any app
+
+    Used by the "Unused Runtimes" section of Spruce.
     """
     diag: list[str] = []
     removable_all: list[str] = []
@@ -548,43 +552,60 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> tuple[list[str], list[str]
         if not refs:
             continue
 
+        # Collect used platform base names from apps + SDKs
         used_platform_bases = set()
-        for a in apps:
-            r = _host_runtime_of_app(a, scope)
+        for app_id in apps:
+            r = _host_runtime_of_app(app_id, scope)
             if r:
                 used_platform_bases.add(_base_of(r)[0])
         for sdk_ref in sdks:
             sdk_name, _arch, _br = _base_of(sdk_ref)
-            platform_name = _sdk_to_platform_name(sdk_name)
-            used_platform_bases.add(platform_name)
+            used_platform_bases.add(_sdk_to_platform_name(sdk_name))
 
         if SPRUCE_DEBUG:
             diag.append(f"{scope} used platform bases: {sorted(used_platform_bases)}")
 
+        # Iterate through installed runtimes
         for ref in refs:
+            # 1. Skip pinned first (most restrictive)
             if ref in pins:
-                pinned_all.append(ref); continue
-            is_sdk = _is_sdk_family(ref)
-            is_platform = _is_platform_family(ref)
-            is_always_kept = _is_always_kept_extension(ref)
-            base_name = _base_of(ref)[0] if _is_base_runtime(ref) else _platform_from_ext(ref)
-            if base_name in used_platform_bases:
+                pinned_all.append(ref)
                 continue
-            if is_sdk or is_platform or is_always_kept:
-                kept_all.append(ref); continue
-            removable_all.append(ref)
 
-            # Skip known extension packs like KStyle, icon themes, codecs, etc.
-            if "KStyle." in ref or ".IconThemes" in ref or "Adwaita" in ref:
+            # 2. Skip common false positives (extensions, icon themes, Adwaita)
+            if (
+                "KStyle." in ref
+                or ".IconThemes" in ref
+                or "Adwaita" in ref
+                or "QGnomePlatform" in ref
+            ):
                 kept_all.append(ref)
                 continue
 
+            # 3. Skip SDKs, Platforms, or always-kept extensions
+            if (
+                _is_sdk_family(ref)
+                or _is_platform_family(ref)
+                or _is_always_kept_extension(ref)
+            ):
+                kept_all.append(ref)
+                continue
 
+            # 4. Skip anything still referenced by a used platform
+            base_name = _base_of(ref)[0] if _is_base_runtime(ref) else _platform_from_ext(ref)
+            if base_name in used_platform_bases:
+                continue
+
+            # 5. Otherwise mark as removable
+            removable_all.append(ref)
+
+    # Deduplicate results
     def dedup(seq: list[str]) -> list[str]:
-        seen = set(); out = []
+        seen, out = set(), []
         for r in seq:
             if r not in seen:
-                seen.add(r); out.append(r)
+                seen.add(r)
+                out.append(r)
         return out
 
     removable = dedup(removable_all)
@@ -594,6 +615,8 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> tuple[list[str], list[str]
     diag.append(f"unused refs (removable): {removable}")
     diag.append(f"unused refs (pinned): {pinned}")
     diag.append(f"unused refs (kept): {kept}")
+
+    # Show debug diagnostics inline (when enabled)
     if SPRUCE_DEBUG:
         app = Gtk.Application.get_default()
         w = app.props.active_window if app else None
@@ -604,7 +627,9 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> tuple[list[str], list[str]
                 lbl.set_text((cur + "\n" if cur else "") + "\n".join(diag))
             except Exception:
                 pass
+
     return removable, pinned, kept
+
 
 def run_flatpak_autoremove_async(on_done) -> None:
     """Run flatpak uninstall --unused for user+system and toast the result."""
