@@ -427,7 +427,7 @@ def _host_installed_runtime_refs(scope: str) -> list[str]:
             pass
     return sorted(results)
 
-_ALWAYS_KEEP_EXT_SUFFIXES = (".GL.default", ".codecs", ".codecs-extra", ".openh264")
+_ALWAYS_KEEP_EXT_SUFFIXES = (".GL.default", ".codecs", ".codecs-extra")
 
 def _is_always_kept_extension(ref: str) -> bool:
     name = _base_of(ref)[0]
@@ -521,85 +521,124 @@ def _installed_sdk_refs(scope: str) -> list[str]:
     refs = _host_installed_runtime_refs(scope)
     return [r for r in refs if _is_sdk_family(r)]
 
+def _pinned_from_remove_unused(scope: str) -> set[str]:
+    """
+    Ask flatpak what it would remove, capture the 'pinned' section,
+    and return normalized refs like 'runtime/org.gnome.Platform/x86_64/48'.
+    We pipe 'n' so it never actually uninstalls.
+    """
+    code, out, err = _run(_host_exec("bash", "-lc", f"printf 'n\n' | flatpak remove --unused {scope}"))
+    text = out or err or ""
+    pins: set[str] = set()
+    capture = False
+    for ln in text.splitlines():
+        s = ln.strip()
+        if not s:
+            continue
+        if "These runtimes in installation" in s and "pinned" in s:
+            capture = True
+            continue
+        if capture:
+            # Stop when we hit the next section/prompt
+            if s.startswith("Proceed ") or s.startswith("Nothing "):
+                capture = False
+                continue
+            # Lines look like: "runtime/org.gnome.Platform/x86_64/48"
+            # or sometimes prefixed with bullets/spaces
+            ref = s.lstrip("*•- ").strip()
+            if ref:
+                if not ref.startswith("runtime/") and ref.count("/") >= 2:
+                    ref = f"runtime/{ref}"
+                if ref.startswith("runtime/"):
+                    pins.add(ref)
+    return pins
 def list_flatpak_unused_with_diag(win: Gtk.Widget) -> tuple[list[str], list[str], list[str]]:
     """
-    Return (removable_refs, pinned_refs, kept_refs) after applying rules.
-
-    - pinned_refs: anything explicitly pinned by Flatpak (never removable)
-    - kept_refs: safety-kept items (base Platforms/Locales, SDKs, extensions, etc.)
-    - removable_refs: unused runtimes or SDKs not required by any app
-
-    Used by the "Unused Runtimes" section of Spruce.
+    Parse `flatpak remove --unused` exactly as Flatpak prints it.
+    Handles:
+      - pinned runtimes section
+      - numbered removable rows (with tabs or Unicode spacing)
+      - proper architecture detection
+      - filters cosmetic/kept items
     """
     diag: list[str] = []
-    removable_all: list[str] = []
-    pinned_all: list[str] = []
-    kept_all: list[str] = []
+    removable_all, pinned_all, kept_all = [], [], []
+
+    # Detect host architecture
+    code, out, _ = _run(_host_exec("flatpak", "--default-arch"))
+    arch = out.strip() if code == 0 and out.strip() else "x86_64"
 
     for scope in ("--user", "--system"):
-        refs = _host_installed_runtime_refs(scope)
-        apps = _host_list_apps(scope)
-        pins = _list_pins(scope)
-        sdks = _installed_sdk_refs(scope)
+        code, out, err = _run(
+            _host_exec("bash", "-lc", f"printf 'n\\n' | flatpak remove --unused {scope}")
+        )
+        text = (out or err or "").strip()
+        diag.append(f"\n[{scope}] flatpak remove --unused output:\n{text}\n")
 
-        diag.append(f"{scope} installed: {len(refs)}")
-        if SPRUCE_DEBUG:
-            diag.append(f"{scope} refs: {refs}")
-            diag.append(f"{scope} pins: {sorted(pins)}")
-            diag.append(f"{scope} sdks: {sdks}")
-        diag.append(f"{scope} apps: {apps}")
+        in_removable = False
+        in_pinned = False
 
-        if not refs:
-            continue
-
-        # Collect used platform base names from apps + SDKs
-        used_platform_bases = set()
-        for app_id in apps:
-            r = _host_runtime_of_app(app_id, scope)
-            if r:
-                used_platform_bases.add(_base_of(r)[0])
-        for sdk_ref in sdks:
-            sdk_name, _arch, _br = _base_of(sdk_ref)
-            used_platform_bases.add(_sdk_to_platform_name(sdk_name))
-
-        if SPRUCE_DEBUG:
-            diag.append(f"{scope} used platform bases: {sorted(used_platform_bases)}")
-
-        # Iterate through installed runtimes
-        for ref in refs:
-            if ref in pins:
-                pinned_all.append(ref)
+        for line in text.splitlines():
+            s = line.strip()
+            if not s:
                 continue
 
-            is_sdk = _is_sdk_family(ref)
-            is_platform = _is_platform_family(ref)
-            is_always_kept = _is_always_kept_extension(ref)
-            base_name = _base_of(ref)[0] if _is_base_runtime(ref) else _platform_from_ext(ref)
-
-            # 1. Skip if runtime or SDK is currently used
-            if base_name in used_platform_bases:
+            # detect pinned section
+            if "These runtimes in installation" in s and "pinned" in s:
+                in_pinned, in_removable = True, False
                 continue
 
-            # 2. Always keep core SDKs and critical extensions (openh264, codecs, etc.)
-            if is_sdk or is_always_kept:
-                kept_all.append(ref)
+            # detect table section (either header or numbered)
+            if s.startswith("ID") and "Op" in s:
+                in_removable, in_pinned = True, False
                 continue
 
-            # 3. Keep common cosmetic extensions like KStyle / IconThemes / Adwaita
-            if "KStyle." in ref or ".IconThemes" in ref or "Adwaita" in ref:
-                kept_all.append(ref)
+            # if it's a numbered row like "1." or "2." we treat it as removable
+            if re.match(r"^\d+\.", s):
+                in_removable, in_pinned = True, False
+
+            # stop sections
+            if s.startswith(("Proceed", "Nothing")):
+                in_pinned = in_removable = False
                 continue
 
-            # 4. Only keep platform families that are *in use*;
-            #    otherwise mark as removable if Flatpak reports them as unused
-            if is_platform and base_name not in used_platform_bases:
+            # pinned items
+            if in_pinned:
+                ref = s.lstrip("*•- ").strip()
+                if ref.count("/") >= 2:
+                    if not ref.startswith("runtime/"):
+                        ref = f"runtime/{ref}"
+                    pinned_all.append(ref)
+                continue
+
+            # removable items
+            if in_removable and re.match(r"^\d+\.", s):
+                # normalize all kinds of whitespace to single spaces
+                clean = re.sub(r"[\s\u200b\u2000-\u200f]+", " ", s)
+                # example: "1. org.kde.Platform 6.9 r"
+                parts = clean.split(" ")
+                parts = [p for p in parts if p and p != "."]
+
+                if SPRUCE_DEBUG:
+                    print(f"DEBUG row parts: {parts}", file=sys.stderr)
+
+                if len(parts) >= 4:
+                    name = parts[1]
+                    branch = parts[2]
+                    ref = f"runtime/{name}/{arch}/{branch}"
+                else:
+                    continue
+                    kept_all.append(ref)
+                    continue
+
+                if ref in pinned_all:
+                    kept_all.append(ref)
+                    continue
+
                 removable_all.append(ref)
                 continue
 
-            # 5. Everything else that's not pinned or required can be safely removed
-            removable_all.append(ref)
-
-    # Deduplicate results
+    # deduplicate
     def dedup(seq: list[str]) -> list[str]:
         seen, out = set(), []
         for r in seq:
@@ -612,24 +651,24 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> tuple[list[str], list[str]
     pinned = dedup(pinned_all)
     kept = dedup(kept_all)
 
-    diag.append(f"unused refs (removable): {removable}")
-    diag.append(f"unused refs (pinned): {pinned}")
-    diag.append(f"unused refs (kept): {kept}")
-
-    # Show debug diagnostics inline (when enabled)
+    # debug output
     if SPRUCE_DEBUG:
-        app = Gtk.Application.get_default()
-        w = app.props.active_window if app else None
-        if w and hasattr(w, "pkg_list"):
-            try:
-                lbl: Gtk.Label = getattr(w, "pkg_list")  # type: ignore
-                cur = lbl.get_text()
-                lbl.set_text((cur + "\n" if cur else "") + "\n".join(diag))
-            except Exception:
-                pass
+        print("\n".join(diag), file=sys.stderr)
+        print("\nParsed removables:", removable, file=sys.stderr)
+        try:
+            app = Gtk.Application.get_default()
+            w = app.props.active_window if app else None
+            if w and hasattr(w, "pkg_list"):
+                lbl: Gtk.Label = getattr(w, "pkg_list")
+                lbl.set_text(
+                    "\n".join(diag)
+                    + "\n\nParsed removables:\n"
+                    + "\n".join(removable)
+                )
+        except Exception:
+            pass
 
     return removable, pinned, kept
-
 
 def run_flatpak_autoremove_async(on_done) -> None:
     """Run flatpak uninstall --unused for user+system and toast the result."""
