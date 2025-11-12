@@ -567,36 +567,36 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> tuple[list[str], list[str]
 
         # Iterate through installed runtimes
         for ref in refs:
-            # 1. Skip pinned first (most restrictive)
             if ref in pins:
                 pinned_all.append(ref)
                 continue
 
-            # 2. Skip common false positives (extensions, icon themes, Adwaita)
-            if (
-                "KStyle." in ref
-                or ".IconThemes" in ref
-                or "Adwaita" in ref
-                or "QGnomePlatform" in ref
-            ):
-                kept_all.append(ref)
-                continue
-
-            # 3. Skip SDKs, Platforms, or always-kept extensions
-            if (
-                _is_sdk_family(ref)
-                or _is_platform_family(ref)
-                or _is_always_kept_extension(ref)
-            ):
-                kept_all.append(ref)
-                continue
-
-            # 4. Skip anything still referenced by a used platform
+            is_sdk = _is_sdk_family(ref)
+            is_platform = _is_platform_family(ref)
+            is_always_kept = _is_always_kept_extension(ref)
             base_name = _base_of(ref)[0] if _is_base_runtime(ref) else _platform_from_ext(ref)
+
+            # 1. Skip if runtime or SDK is currently used
             if base_name in used_platform_bases:
                 continue
 
-            # 5. Otherwise mark as removable
+            # 2. Always keep core SDKs and critical extensions (openh264, codecs, etc.)
+            if is_sdk or is_always_kept:
+                kept_all.append(ref)
+                continue
+
+            # 3. Keep common cosmetic extensions like KStyle / IconThemes / Adwaita
+            if "KStyle." in ref or ".IconThemes" in ref or "Adwaita" in ref:
+                kept_all.append(ref)
+                continue
+
+            # 4. Only keep platform families that are *in use*;
+            #    otherwise mark as removable if Flatpak reports them as unused
+            if is_platform and base_name not in used_platform_bases:
+                removable_all.append(ref)
+                continue
+
+            # 5. Everything else that's not pinned or required can be safely removed
             removable_all.append(ref)
 
     # Deduplicate results
