@@ -3,6 +3,7 @@
 **Spruce** is a lightweight cache cleaner and system maintenance tool designed for **GNU/Linux**.
 It helps keep your system fresh by clearing unneeded caches, logs, and temporary files in a clean, Adwaita-based GTK interface.
 
+
 ### Features
 
 * **One-click cleaning** for APT, Flatpak, and thumbnail caches
@@ -14,13 +15,13 @@ It helps keep your system fresh by clearing unneeded caches, logs, and temporary
 
 ---
 
-### Usage
+### Install
 
-Launch **Spruce** from your app menu or by running:
-
+The recommended way to install Spruce is throught Flathub:
 ```bash
-spruce
+flatpak install flathub io.github.shonubot.Spruce
 ```
+Launch **Spruce** from your app menu
 
 You’ll see a minimal window with clear sections:
 
