@@ -40,6 +40,9 @@
 
 
   <releases>
+    <release version="0.1.1" date="2025-11-13">
+      <description><p>Updated app icon and screenshots to follow Flathub quality guidelines.</p></description>
+    </release>
     <release version="0.1.0" date="2025-09-01">
       <description><p>Initial release.</p></description>
     </release>
