@@ -23,16 +23,15 @@
     <category>System</category>
   </categories>
 
-  <!-- Flathub brand colors -->
   <branding>
     <color type="primary" scheme_preference="light">#81cf85</color>
     <color type="primary" scheme_preference="dark">#60d267</color>
   </branding>
 
 <description>
-  <p>Spruce is a simple system cleaner that helps you reclaim disk space and keep your desktop running smoothly. It goes beyond clearing application caches—Spruce can sweep through leftover system files, unused Flatpak data, and other clutter that builds up over time. With clear previews and safe defaults, Spruce makes it easy to tidy up without worry.</p>
+  <p>Spruce is a lightweight cache cleaner and system maintenance tool designed for GNU/Linux. It helps keep your system fresh by clearing unneeded caches, logs, and temporary files in a clean, Adwaita-based GTK interface.</p>
   <ul>
-    <li>Scan common cache and system clutter locations</li>
+    <li>Scan common cache locations</li>
     <li>Detect unused Flatpak runtimes and data</li>
     <li>Preview exactly what will be removed</li>
     <li>Clean with a single click</li>
@@ -48,12 +47,20 @@
 
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/shonubot/Spruce/11af2bc9cb60bf68de3a5dd304d6f4005ce7e75c/screenshots/Spruce-main.png</image>
-      <caption>Main view</caption>
+      <image>https://raw.githubusercontent.com/shonubot/Spruce/11af2bc9cb60bf68de3a5dd304d6f4005ce7e75c/screenshots/Light/Spruce-main.png</image>
+      <caption>Main view (Light theme)</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/shonubot/Spruce/11af2bc9cb60bf68de3a5dd304d6f4005ce7e75c/screenshots/Spruce-sweep.png</image>
-      <caption>Cleaning menu</caption>
+      <image>https://raw.githubusercontent.com/shonubot/Spruce/11af2bc9cb60bf68de3a5dd304d6f4005ce7e75c/screenshots/Light/Spruce-sweep.png</image>
+      <caption>Cleaning menu (Light theme)</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/shonubot/Spruce/66536ef54bbb6318f02fdac4849d1c453c9433bf/screenshots/Dark/Spruce-main.png</image>
+      <caption>Main view (Dark theme)</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/shonubot/Spruce/66536ef54bbb6318f02fdac4849d1c453c9433bf/screenshots/Dark/Spruce-sweep.png</image>
+      <caption>Cleaning menu (Dark theme)</caption>
     </screenshot>
   </screenshots>
 
