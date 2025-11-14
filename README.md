@@ -50,7 +50,9 @@ You’re free to use, modify, and redistribute it under the same terms.
 
 ### Screenshots
 
-![Spruce Main Window](screenshots/Spruce-main.png)
-![Spruce Sweep Window](screenshots/Spruce-sweep.png)
+![Spruce Main Window in light theme](screenshots/Light/Spruce-main.png)
+![Spruce Sweep Window in light theme](screenshots/Light/Spruce-sweep.png)
+![Spruce Main Window in dark theme](screenshots/Dark/Spruce-main.png)
+![Spruce Sweep Window in dark theme](screenshots/Dark/Spruce-sweep.png)
 
 ---
