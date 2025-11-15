@@ -2,7 +2,7 @@
 <component type="desktop-application">
   <id>io.github.shonubot.Spruce</id>
   <name>Spruce</name>
-  <summary>Clean up app caches</summary>
+  <summary>Reclaim disk space</summary>
 
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
