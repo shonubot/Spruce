@@ -17,7 +17,7 @@ corresponding .blp file and regenerate this file with blueprint-compiler.
             <property name="title-widget">
               <object class="AdwWindowTitle">
                 <property name="title">Spruce</property>
-                <property name="subtitle">Cleaner</property>
+                <property name="subtitle">Free up disk space</property>
               </object>
             </property>
           </object>
@@ -72,7 +72,7 @@ corresponding .blp file and regenerate this file with blueprint-compiler.
                         <property name="spacing">12</property>
                         <child>
                           <object class="GtkButton" id="clear_btn">
-                            <property name="label">Clear temp</property>
+                            <property name="label">Clear cache</property>
                             <property name="css-classes">pill</property>
                             <property name="halign">1</property>
                           </object>

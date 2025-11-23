@@ -1,7 +1,7 @@
 using Gtk 4.0;
 using Adw 1;
 
-template SpruceWindow : Adw.ApplicationWindow {
+template $SpruceWindow : Adw.ApplicationWindow {
   title: "Spruce";
   default-width: 960;
   default-height: 600;
@@ -11,7 +11,7 @@ template SpruceWindow : Adw.ApplicationWindow {
     Adw.HeaderBar {
       title-widget: Adw.WindowTitle {
         title: "Spruce";
-        subtitle: "Cleaner";
+        subtitle: "Free up disk space";
       };
     }
 
@@ -63,7 +63,7 @@ template SpruceWindow : Adw.ApplicationWindow {
             spacing: 12;
 
             Gtk.Button clear_btn {
-              label: "Clear temp";
+              label: "Clear cache";
               css-classes: ["pill"];
               halign: start;
             }
