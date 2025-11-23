@@ -768,6 +768,34 @@ def _is_allowed_host_target(p: Path) -> bool:
         pass
     return False
 
+def _is_safe_target(p: Path) -> bool:
+    """
+    Safety check: ensure path is within allowed directories and not critical system paths.
+    """
+    try:
+        rp = p.resolve()
+        # Block root and critical system directories
+        critical_paths = [Path("/"), Path("/home"), Path("/usr"), Path("/etc"), 
+                         Path("/var"), Path("/bin"), Path("/sbin"), Path("/boot"),
+                         Path("/sys"), Path("/proc"), Path("/dev")]
+        
+        for critical in critical_paths:
+            try:
+                if rp == critical.resolve() or critical.resolve() == rp:
+                    return False
+            except Exception:
+                pass
+        
+        # Must be relative to home directory
+        home = Path.home().resolve()
+        if not rp.is_relative_to(home):
+            return False
+            
+        # Check against allowed prefixes
+        return _is_allowed_host_target(p)
+    except Exception:
+        return False
+
 # ─────────────────────────── UI ───────────────────────────
 
 @Gtk.Template(filename=_find_ui())
@@ -895,7 +923,7 @@ class SpruceWindow(Adw.ApplicationWindow):
     def _on_remove_clicked(self, _btn):
         run_flatpak_autoremove_async(self._refresh_autoremove_label)
 
-    # ─────────────── clear cache / options ───────────────
+    # ─────────────── clear temp / options ───────────────
 
     def _on_clear_clicked(self, _btn):
         if self._opts["sweep"] or self._opts["trash"]:
@@ -926,7 +954,7 @@ class SpruceWindow(Adw.ApplicationWindow):
     def _on_options_clicked(self, _btn):
         win = Adw.PreferencesWindow(transient_for=self, modal=True, title="Preferences")
         page = Adw.PreferencesPage()
-        group = Adw.PreferencesGroup(title='What to clear when you press "Clear cache"')
+        group = Adw.PreferencesGroup(title='What to clear when you press "Clear temp"')
         page.add(group)
 
         def add_switch(title, subtitle, key):
@@ -1081,6 +1109,10 @@ class SpruceWindow(Adw.ApplicationWindow):
             host_targets: list[Path] = []
             for sw, p, can_delete, on_host in zip(toggles, paths, deletable, on_host_flags):
                 if not can_delete or not sw.get_active():
+                    continue
+                
+                # Safety check: verify path is safe to delete
+                if not _is_safe_target(p):
                     continue
                 
                 # Check if this is the trash directory
