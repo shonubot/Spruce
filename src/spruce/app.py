@@ -89,6 +89,61 @@ def human_size(n: int) -> str:
 def xdg_cache() -> Path:
     return Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
 
+def xdg_data() -> Path:
+    return Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share")))
+
+def trash_dir() -> Path:
+    """Return the user's trash directory following XDG spec."""
+    return xdg_data() / "Trash"
+
+def get_trash_size() -> int:
+    """Calculate total size of files in trash (host-aware)."""
+    trash = trash_dir()
+    files_dir = trash / "files"
+    
+    if not IS_FLATPAK:
+        if not files_dir.exists():
+            return 0
+        total_size = 0
+        try:
+            for item in files_dir.rglob('*'):
+                try:
+                    if item.is_file():
+                        total_size += item.stat().st_size
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return total_size
+    
+    # For Flatpak, use host access
+    script = f"""
+import os, sys
+from pathlib import Path
+trash_files = Path.home() / '.local' / 'share' / 'Trash' / 'files'
+if not trash_files.is_dir():
+    print("0")
+    sys.exit(0)
+total = 0
+try:
+    for item in trash_files.rglob('*'):
+        try:
+            if item.is_file():
+                total += item.stat().st_size
+        except Exception:
+            pass
+except Exception:
+    pass
+print(total)
+"""
+    code, out, _ = _run(_host_exec("python3", "-c", script))
+    if code == 0 and out.strip():
+        try:
+            return int(out.strip())
+        except Exception:
+            pass
+    return 0
+
 # ─────────────────────────── subprocess helpers ───────────────────────────
 
 def _host_exec(*argv: str) -> list[str]:
@@ -136,10 +191,6 @@ def _host_list_dirs_with_sizes(base: Path) -> list[tuple[str, int]]:
                 pass
         return sorted(result, key=lambda t: t[1], reverse=True)
 
-# Script is needed to reduce permissions and only need flatpak-spawn --host
-# The Script cannot run directly in the app
-# It needs to be run through flatpak-spawn --host
-# But it is python itself
     script = f"""
 import os, sys
 from pathlib import Path
@@ -288,34 +339,6 @@ def _disk_usage_home_host() -> Tuple[int, int, int] | None:
             except Exception:
                 pass
     return None
-
-def disk_usage_home() -> Tuple[int, int, int]:
-    # Prefer authoritative host numbers when sandboxed
-    if IS_FLATPAK:
-        host = _disk_usage_home_host()
-        if host:
-            return host
-    # Fallbacks (sandbox view)
-    p = Path.home()
-    try:
-        info = Gio.File.new_for_path(str(p)).query_filesystem_info(
-            "filesystem::size,filesystem::free", None
-        )
-        total = int(info.get_attribute_uint64("filesystem::size"))
-        free = int(info.get_attribute_uint64("filesystem::free"))
-        used = max(0, total - free)
-        if total > 0:
-            return total, used, free
-    except Exception:
-        pass
-    try:
-        total, used, free = shutil.disk_usage(str(p))
-        if total > 0:
-            return int(total), int(used), int(free)
-    except Exception:
-        pass
-    return 1, 0, 1
-
 
 def _gio_fs_usage(path: Path) -> Tuple[int, int, int] | None:
     try:
@@ -552,6 +575,7 @@ def _pinned_from_remove_unused(scope: str) -> set[str]:
                 if ref.startswith("runtime/"):
                     pins.add(ref)
     return pins
+
 def list_flatpak_unused_with_diag(win: Gtk.Widget) -> tuple[list[str], list[str], list[str]]:
     """
     Parse `flatpak remove --unused` exactly as Flatpak prints it.
@@ -698,9 +722,6 @@ def run_flatpak_autoremove_async(on_done) -> None:
 
 # ─────────────────────────── cache enumeration ───────────────────────────
 
-
-
-
 def _sandbox_first_level_cache_entries() -> list[tuple[Path, int]]:
     """First-level children of sandbox XDG_CACHE_HOME with sizes."""
     root = xdg_cache()
@@ -734,6 +755,7 @@ def _host_cache_paths_and_sizes() -> list[tuple[str, int]]:
 _ALLOWED_HOST_PREFIXES = [
     Path.home() / ".cache",
     Path.home() / ".var" / "app",
+    Path.home() / ".local" / "share" / "Trash",
 ]
 
 def _is_allowed_host_target(p: Path) -> bool:
@@ -775,7 +797,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         self.timeout_source = None
 
         # Add a small "What's hidden?" button next to Remove
-        self.kept_btn = Gtk.Button(label="What’s hidden?")
+        self.kept_btn = Gtk.Button(label="What's hidden?")
         self.kept_btn.set_has_frame(True)
         self.kept_btn.set_valign(Gtk.Align.CENTER)
         self.kept_btn.set_sensitive(False)
@@ -787,8 +809,8 @@ class SpruceWindow(Adw.ApplicationWindow):
         except Exception:
             pass
 
-        # Options
-        self._opts = {"thumbs": True, "webkit": True, "fontconf": True, "mesa": True, "sweep": True}
+        # Options - added "trash" option with default True
+        self._opts = {"thumbs": True, "webkit": True, "fontconf": True, "mesa": True, "sweep": True, "trash": True}
         self._current_toast = None
 
         # Data for dialog
@@ -841,7 +863,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         v.set_margin_top(12); v.set_margin_bottom(12); v.set_margin_start(12); v.set_margin_end(12)
 
         intro = Gtk.Label(
-            label=("These items are hidden from removal because they’re either pinned by Flatpak "
+            label=("These items are hidden from removal because they're either pinned by Flatpak "
                    "or kept for safety (e.g., base Platforms/Locales, SDKs, or essential extensions)."),
             xalign=0
         )
@@ -873,10 +895,10 @@ class SpruceWindow(Adw.ApplicationWindow):
     def _on_remove_clicked(self, _btn):
         run_flatpak_autoremove_async(self._refresh_autoremove_label)
 
-    # ─────────────── clear temp / options ───────────────
+    # ─────────────── clear cache / options ───────────────
 
     def _on_clear_clicked(self, _btn):
-        if self._opts["sweep"]:
+        if self._opts["sweep"] or self._opts["trash"]:
             self._current_toast = self._toast("Scanning cache directories...")
             GLib.Thread.new("cache_scanner", self._scan_cache_in_thread)
         else:
@@ -904,7 +926,7 @@ class SpruceWindow(Adw.ApplicationWindow):
     def _on_options_clicked(self, _btn):
         win = Adw.PreferencesWindow(transient_for=self, modal=True, title="Preferences")
         page = Adw.PreferencesPage()
-        group = Adw.PreferencesGroup(title="What to clear when you press “Clear temp”")
+        group = Adw.PreferencesGroup(title='What to clear when you press "Clear cache"')
         page.add(group)
 
         def add_switch(title, subtitle, key):
@@ -924,6 +946,14 @@ class SpruceWindow(Adw.ApplicationWindow):
         )
         row.connect("notify::active", lambda r, *_: self._opts.__setitem__("sweep", r.get_active()))
         g2.add(row)
+        
+        # Add trash sweep option
+        trash_path = str(trash_dir())
+        row_trash = Adw.SwitchRow(
+            title="Trash sweep", subtitle=f"Empty trash bin — {trash_path}", active=self._opts["trash"]
+        )
+        row_trash.connect("notify::active", lambda r, *_: self._opts.__setitem__("trash", r.get_active()))
+        g2.add(row_trash)
 
         hb = Adw.HeaderBar()
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -939,23 +969,36 @@ class SpruceWindow(Adw.ApplicationWindow):
           • host ~/.cache/* (each first-level item)
           • host ~/.var/app/*/cache  (one entry per app cache)
           • sandbox XDG_CACHE/* (each first-level item)
+          • trash bin (if enabled)
         """
         entries: list[tuple[Path, int, bool, bool, str]] = []
 
         # Host ~/.cache/*
-        for apath, sz in _host_first_level_cache_entries():
-            p = Path(apath)
-            entries.append((p, sz, True, True, p.name))
+        if self._opts["sweep"]:
+            for apath, sz in _host_first_level_cache_entries():
+                p = Path(apath)
+                entries.append((p, sz, True, True, p.name))
 
-        # Host ~/.var/app/*/cache — label by app ID
-        for apath, sz in _host_app_cache_entries():
-            p = Path(apath)
-            app_name = p.parent.name if p.name == "cache" else p.name
-            entries.append((p, sz, True, True, app_name))
+            # Host ~/.var/app/*/cache — label by app ID
+            for apath, sz in _host_app_cache_entries():
+                p = Path(apath)
+                app_name = p.parent.name if p.name == "cache" else p.name
+                entries.append((p, sz, True, True, app_name))
 
-        # Sandbox ~/.cache/*
-        for p, sz in _sandbox_first_level_cache_entries():
-            entries.append((p, sz, True, False, p.name))
+            # Sandbox ~/.cache/*
+            for p, sz in _sandbox_first_level_cache_entries():
+                entries.append((p, sz, True, False, p.name))
+
+        # Add trash if enabled
+        if self._opts["trash"]:
+            trash_size = get_trash_size()
+            # Use actual host path for display
+            trash_path = Path.home() / ".local" / "share" / "Trash"
+            # Always show trash even if size is 0
+            entries.append((trash_path, trash_size, True, True, "Trash bin"))
+
+        # Sort all entries by size (largest first)
+        entries.sort(key=lambda t: t[1], reverse=True)
 
         GLib.idle_add(self._show_sweep_dialog, entries)
         return None
@@ -1001,6 +1044,9 @@ class SpruceWindow(Adw.ApplicationWindow):
                 subtitle=f"{p} ({loc}) — {human_size(sz)}"
             )
             sw = Gtk.Switch(valign=Gtk.Align.CENTER, sensitive=can_delete)
+            # Auto-toggle trash bin switch by default
+            if "Trash bin" in display_name:
+                sw.set_active(True)
             row.add_suffix(sw)
             listbox.append(row)
             toggles.append(sw)
@@ -1019,6 +1065,9 @@ class SpruceWindow(Adw.ApplicationWindow):
             rm_btn.set_sensitive(any(s.get_active() and s.get_sensitive() for s in toggles))
         for s in toggles:
             s.connect("notify::active", update_btn)
+        
+        # Initial button state check
+        update_btn()
 
         def _set_all(active: bool):
             for s in toggles:
@@ -1033,15 +1082,54 @@ class SpruceWindow(Adw.ApplicationWindow):
             for sw, p, can_delete, on_host in zip(toggles, paths, deletable, on_host_flags):
                 if not can_delete or not sw.get_active():
                     continue
+                
+                # Check if this is the trash directory
+                is_trash = str(p).endswith(".local/share/Trash") or p.name == "Trash"
+                
                 if on_host:
-                    host_targets.append(p)
+                    if is_trash:
+                        # Special handling for trash on host
+                        script = """
+import shutil
+from pathlib import Path
+trash = Path.home() / '.local' / 'share' / 'Trash'
+files_dir = trash / 'files'
+info_dir = trash / 'info'
+try:
+    if files_dir.exists():
+        shutil.rmtree(files_dir, ignore_errors=True)
+        files_dir.mkdir(exist_ok=True)
+    if info_dir.exists():
+        shutil.rmtree(info_dir, ignore_errors=True)
+        info_dir.mkdir(exist_ok=True)
+    print("success")
+except Exception as e:
+    print(f"error: {e}")
+"""
+                        code, out, _ = _run(_host_exec("python3", "-c", script))
+                        if code == 0 and "success" in out:
+                            removed += 1
+                    else:
+                        host_targets.append(p)
                 else:
                     try:
-                        if p.is_dir():
+                        if is_trash:
+                            # Special handling for trash in sandbox
+                            files_dir = p / "files"
+                            info_dir = p / "info"
+                            if files_dir.exists():
+                                shutil.rmtree(files_dir, ignore_errors=True)
+                                files_dir.mkdir(exist_ok=True)
+                            if info_dir.exists():
+                                shutil.rmtree(info_dir, ignore_errors=True)
+                                info_dir.mkdir(exist_ok=True)
+                            removed += 1
+                        elif p.is_dir():
                             shutil.rmtree(p, ignore_errors=True)
-                        else:
+                            removed += 1
+                        elif p.exists():
                             p.unlink(missing_ok=True)
-                        removed += 1
+                            removed += 1
                     except Exception:
                         pass
             if host_targets:
