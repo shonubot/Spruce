@@ -40,6 +40,9 @@
 
 
   <releases>
+    <release version="0.1.2" date="2025-11-23">
+      <description><p>Added Trash bin cleanup.</p></description>
+    </release>
     <release version="0.1.1" date="2025-11-13">
       <description><p>Updated app icon and screenshots to follow Flathub quality guidelines.</p></description>
     </release>
@@ -50,19 +53,19 @@
 
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/shonubot/Spruce/66536ef54bbb6318f02fdac4849d1c453c9433bf/screenshots/Light/Spruce-main.png</image>
+      <image>https://raw.githubusercontent.com/shonubot/Spruce/dadf8805c6b31089e445c19dc944bdbca35eb872/screenshots/Light/Spruce-main.png</image>
       <caption>Main view (Light theme)</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/shonubot/Spruce/66536ef54bbb6318f02fdac4849d1c453c9433bf/screenshots/Light/Spruce-sweep.png</image>
+      <image>https://raw.githubusercontent.com/shonubot/Spruce/dadf8805c6b31089e445c19dc944bdbca35eb872/screenshots/Light/Spruce-sweep.png</image>
       <caption>Cleaning menu (Light theme)</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/shonubot/Spruce/66536ef54bbb6318f02fdac4849d1c453c9433bf/screenshots/Dark/Spruce-main.png</image>
+      <image>https://raw.githubusercontent.com/shonubot/Spruce/dadf8805c6b31089e445c19dc944bdbca35eb872/screenshots/Dark/Spruce-main.png</image>
       <caption>Main view (Dark theme)</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/shonubot/Spruce/66536ef54bbb6318f02fdac4849d1c453c9433bf/screenshots/Dark/Spruce-sweep.png</image>
+      <image>https://raw.githubusercontent.com/shonubot/Spruce/dadf8805c6b31089e445c19dc944bdbca35eb872/screenshots/Dark/Spruce-sweep.png</image>
       <caption>Cleaning menu (Dark theme)</caption>
     </screenshot>
   </screenshots>
