@@ -18,7 +18,7 @@ It helps keep your system fresh by clearing unneeded caches, logs, temporary fil
 
 The recommended way to install Spruce is throught Flathub:<br>
 <br><a href="https://flathub.org/en/apps/io.github.shonubot.Spruce">
-    <img width="140" height="60" alt="Visit Flathub.org" src="https://github.com/user-attachments/assets/48f45b22-c65a-4b3b-b0bc-da0a51293071" />
+    <img width="140" height="60" alt="Spruce Flathub Page" src="https://github.com/user-attachments/assets/48f45b22-c65a-4b3b-b0bc-da0a51293071" />
 </a>
 ```bash
 flatpak install flathub io.github.shonubot.Spruce
