@@ -1093,9 +1093,6 @@ class SpruceWindow(Adw.ApplicationWindow):
                 subtitle=f"{p} ({loc}) — {human_size(sz)}"
             )
             sw = Gtk.Switch(valign=Gtk.Align.CENTER, sensitive=can_delete)
-            # Auto-toggle trash bin switch by default
-            if "Trash bin" in display_name:
-                sw.set_active(True)
             row.add_suffix(sw)
             listbox.append(row)
             toggles.append(sw)
