@@ -694,32 +694,6 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> tuple[list[str], list[str]
 
     return removable, pinned, kept
 
-def run_flatpak_autoremove_async(on_done) -> None:
-    """Run flatpak uninstall --unused for user+system and toast the result."""
-    def _run_and_count(scope: str) -> int:
-        code, out, _err = _run(_host_exec("flatpak", "uninstall", "--unused", scope, "-y"))
-        return sum(1 for ln in (out or "").splitlines() if ln.strip().startswith("Uninstalling "))
-
-    removed = 0
-    try: removed += _run_and_count("--user")
-    except Exception: pass
-    try: removed += _run_and_count("--system")
-    except Exception: pass
-
-    def _after():
-        on_done()
-        app = Gtk.Application.get_default()
-        win = app.props.active_window if app else None
-        if win and hasattr(win, "_toast"):
-            try:
-                win._toast(f"Removed {removed} item(s)" if removed > 0
-                           else "Flatpak reported nothing unused to uninstall")
-            except Exception:
-                pass
-        return GLib.SOURCE_REMOVE
-
-    GLib.timeout_add_seconds(1, _after)
-
 # ─────────────────────────── cache enumeration ───────────────────────────
 
 def _sandbox_first_level_cache_entries() -> list[tuple[Path, int]]:
@@ -921,7 +895,54 @@ class SpruceWindow(Adw.ApplicationWindow):
         dlg.set_child(body)
 
     def _on_remove_clicked(self, _btn):
-        run_flatpak_autoremove_async(self._refresh_autoremove_label)
+        confirmation = Adw.AlertDialog.new(
+            "Remove unused packages?",
+            "This will uninstall unused Flatpak runtimes. This operation might take a while."
+        )
+        confirmation.add_response("cancel", "Cancel")
+        confirmation.add_response("continue", "Continue")
+        confirmation.set_response_appearance("continue", Adw.ResponseAppearance.SUGGESTED)
+        confirmation.set_default_response("cancel")
+        confirmation.set_close_response("cancel")
+        
+        def on_response(_dialog, response):
+            if response == "continue":
+                self._current_toast = self._toast("Removing packages... (This might take a while)")
+                GLib.Thread.new("package_remover", self._remove_packages_in_thread)
+        
+        confirmation.connect("response", on_response)
+        confirmation.present(self)
+    
+    def _remove_packages_in_thread(self):
+        def _run_and_count(scope: str) -> int:
+            code, out, _err = _run(_host_exec("flatpak", "uninstall", "--unused", scope, "-y"))
+            return sum(1 for ln in (out or "").splitlines() if ln.strip().startswith("Uninstalling "))
+
+        removed = 0
+        try: removed += _run_and_count("--user")
+        except Exception: pass
+        try: removed += _run_and_count("--system")
+        except Exception: pass
+        
+        def _after():
+            if self._current_toast:
+                self._current_toast.close()
+                self._current_toast = None
+            
+            self._refresh_autoremove_label()
+            
+            app = Gtk.Application.get_default()
+            win = app.props.active_window if app else None
+            if win and hasattr(win, "_toast"):
+                try:
+                    win._toast(f"Removed {removed} item(s)" if removed > 0
+                               else "Flatpak reported nothing unused to uninstall")
+                except Exception:
+                    pass
+            return GLib.SOURCE_REMOVE
+        
+        GLib.idle_add(_after)
+        return None
 
     # ─────────────── clear temp / options ───────────────
 
