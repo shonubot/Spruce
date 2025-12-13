@@ -1166,7 +1166,6 @@ except Exception as e:
 
         rm_btn.connect("clicked", do_rm)
         actions.set_halign(Gtk.Align.START)
-        v.append(actions)
 
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         body.append(header)
