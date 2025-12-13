@@ -30,8 +30,6 @@ APP_ID = "io.github.shonubot.Spruce"
 IS_FLATPAK = Path("/.flatpak-info").exists()
 SPRUCE_DEBUG = os.environ.get("SPRUCE_DEBUG") == "1"
 
-# ─────────────────────────── helpers ───────────────────────────
-
 def _find_ui() -> str:
     """
     Locate window.ui across common layouts:
@@ -144,8 +142,6 @@ print(total)
             pass
     return 0
 
-# ─────────────────────────── subprocess helpers ───────────────────────────
-
 def _host_exec(*argv: str) -> list[str]:
     return ["flatpak-spawn", "--host", *argv] if IS_FLATPAK else list(argv)
 
@@ -163,8 +159,6 @@ def _run(argv: list[str], stdin_text: str | None = None) -> tuple[int, str, str]
         return code, out or "", err or ""
     except Exception as e:
         return 127, "", str(e)
-
-# ─────────────────────────── host helpers (sizes & deletion) ───────────────────────────
 
 def _host_list_dirs_with_sizes(base: Path) -> list[tuple[str, int]]:
     """Enumerate first-level subdirs under `base` on the host and return [(path, size)]."""
@@ -291,8 +285,6 @@ def _host_rm_rf(path: Path) -> bool:
     return code == 0
 
 
-# ─────────────────────────── disk usage (prefer host) ───────────────────────────
-
 def _disk_usage_home_host() -> Tuple[int, int, int] | None:
     """Return (total, used, free) for $HOME from the host using multiple fallbacks."""
     # 1) Prefer df with explicit bytes
@@ -372,8 +364,6 @@ def disk_usage_home() -> Tuple[int, int, int]:
     except Exception:
         pass
     return 1, 0, 1
-
-# ─────────────────────────── Flatpak discovery (unused runtimes) ───────────────────────────
 
 APP_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+(?:\.[A-Za-z0-9_.-]+)+$")
 RUNTIME_LINE_RE = re.compile(r"^Runtime:\s*(.+?)\s*$", re.IGNORECASE)
@@ -694,8 +684,6 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> tuple[list[str], list[str]
 
     return removable, pinned, kept
 
-# ─────────────────────────── cache enumeration ───────────────────────────
-
 def _sandbox_first_level_cache_entries() -> list[tuple[Path, int]]:
     """First-level children of sandbox XDG_CACHE_HOME with sizes."""
     root = xdg_cache()
@@ -723,8 +711,6 @@ def _sandbox_first_level_cache_entries() -> list[tuple[Path, int]]:
 def _host_cache_paths_and_sizes() -> list[tuple[str, int]]:
     """Compatibility shim: host ~/.cache/* + ~/.var/app/*/cache."""
     return _host_first_level_cache_entries() + _host_app_cache_entries()
-
-# ─────────────────────────── deletion guard ───────────────────────────
 
 _ALLOWED_HOST_PREFIXES = [
     Path.home() / ".cache",
@@ -770,7 +756,7 @@ def _is_safe_target(p: Path) -> bool:
     except Exception:
         return False
 
-# ─────────────────────────── UI ───────────────────────────
+# UI
 
 @Gtk.Template(filename=_find_ui())
 class SpruceWindow(Adw.ApplicationWindow):
@@ -811,18 +797,15 @@ class SpruceWindow(Adw.ApplicationWindow):
         except Exception:
             pass
 
-        # Options - added "trash" option with default True
         self._opts = {"thumbs": True, "webkit": True, "fontconf": True, "mesa": True, "sweep": True, "trash": True}
         self._current_toast = None
 
         # Data for dialog
-        self._last_hidden: list[str] = []  # pinned + kept-for-safety combined
-
+        self._last_hidden: list[str] = []
+        
         # Initial UI
         self._refresh_autoremove_label()
         self.pie_chart.queue_draw()
-
-    # ─────────────── unused runtimes card ───────────────
 
     def _refresh_autoremove_label(self):
         if self.timeout_source:
@@ -830,7 +813,6 @@ class SpruceWindow(Adw.ApplicationWindow):
             self.timeout_source = None
 
         removable, pinned, kept = list_flatpak_unused_with_diag(self)
-        # Cache for dialog — combine pinned + kept into a single list
         combined = []
         seen = set()
         for lst in (pinned, kept):
@@ -839,21 +821,17 @@ class SpruceWindow(Adw.ApplicationWindow):
                     seen.add(r); combined.append(r)
         self._last_hidden = combined
 
-        # Show ONLY the Removable list in the label
         if not removable:
             self.pkg_list.set_text("Nothing unused to uninstall")
             self.remove_btn.set_sensitive(False)
         else:
             self.pkg_list.set_text("Removable: " + " ".join(removable))
             self.remove_btn.set_sensitive(True)
-
-        # Enable the "What's hidden?" button if there is anything to show
         self.kept_btn.set_sensitive(bool(self._last_hidden))
 
         return GLib.SOURCE_REMOVE
 
     def _on_show_kept_clicked(self, _btn):
-        # Build a simple dialog listing hidden items (pinned or safety-kept)
         dlg = Adw.Dialog.new()
         dlg.set_title("Hidden items")
         dlg.present(self)
@@ -944,8 +922,6 @@ class SpruceWindow(Adw.ApplicationWindow):
         GLib.idle_add(_after)
         return None
 
-    # ─────────────── clear temp / options ───────────────
-
     def _on_clear_clicked(self, _btn):
         if self._opts["sweep"] or self._opts["trash"]:
             self._current_toast = self._toast("Scanning cache directories...")
@@ -995,8 +971,6 @@ class SpruceWindow(Adw.ApplicationWindow):
         )
         row.connect("notify::active", lambda r, *_: self._opts.__setitem__("sweep", r.get_active()))
         g2.add(row)
-        
-        # Add trash sweep option
         trash_path = str(trash_dir())
         row_trash = Adw.SwitchRow(
             title="Trash sweep", subtitle=f"Empty trash bin — {trash_path}", active=self._opts["trash"]
@@ -1010,19 +984,15 @@ class SpruceWindow(Adw.ApplicationWindow):
         win.set_content(box)
         win.present()
 
-    # ─────────────── cache sweep (host + sandbox) ───────────────
-
     def _scan_cache_in_thread(self):
         """
         Build the sweep list with:
-          • host ~/.cache/* (each first-level item)
-          • host ~/.var/app/*/cache  (one entry per app cache)
-          • sandbox XDG_CACHE/* (each first-level item)
-          • trash bin (if enabled)
+          - host ~/.cache/* (each first-level item)
+          - host ~/.var/app/*/cache  (one entry per app cache)
+          - sandbox XDG_CACHE/* (each first-level item)
+          - trash bin (if enabled)
         """
         entries: list[tuple[Path, int, bool, bool, str]] = []
-
-        # Host ~/.cache/*
         if self._opts["sweep"]:
             for apath, sz in _host_first_level_cache_entries():
                 p = Path(apath)
@@ -1203,9 +1173,6 @@ except Exception as e:
         body.append(v)
         dlg.set_child(body)
 
-
-    # ─────────────── pie chart ───────────────
-
     def _draw_chart(self, _area, cr, w: int, h: int, _data):
         if cairo is None:
             layout = PangoCairo.create_layout(cr)
@@ -1251,14 +1218,10 @@ except Exception as e:
         rim_label(used_mid, f"Used — {human_size(used)}", col_used)
         rim_label(free_mid, f"Free — {human_size(free)}", col_free)
 
-    # ─────────────── small helper ───────────────
-
     def _toast(self, text: str):
         dlg = Adw.AlertDialog.new("Spruce", text)
         dlg.add_response("ok", "OK"); dlg.set_default_response("ok"); dlg.present(self)
         return dlg
-
-# ─────────────────────────── app ───────────────────────────
 
 class SpruceApp(Adw.Application):
     def __init__(self):
