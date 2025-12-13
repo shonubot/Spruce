@@ -1,4 +1,4 @@
-project('spruce', version: '0.1.3', license: 'GPL-3.0-or-later')
+project('spruce', version: '0.1.4', license: 'GPL-3.0-or-later')
 
 py = import('python').find_installation('python3')
 

@@ -40,6 +40,9 @@
 
 
   <releases>
+    <release version="0.1.4" date="2025-12-13">
+      <description><p>Fixed a visual gap between the shaft and handle in the app icon. Fixed a GTK critical warning that occurred during cache cleanup and updated the application to the GNOME 49 runtime.</p></description>
+    </release>
     <release version="0.1.3" date="2025-11-30">
       <description><p>Added confirmation and progress alerts to package removal and disabled auto-toggle for trash bin cleanup.</p></description>
     </release>
