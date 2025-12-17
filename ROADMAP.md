@@ -2,3 +2,4 @@
  - Add the ability to clean up Snap appication caches
  - Add the ability to clean up leftover/unused .deb files in /var/cache/apt/archives/
  - Improve file storage graph with proper labels that don't look invisible
+ - Show how much storage was freed after cleaning cache
