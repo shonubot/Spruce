@@ -31,15 +31,6 @@ IS_FLATPAK = Path("/.flatpak-info").exists()
 SPRUCE_DEBUG = os.environ.get("SPRUCE_DEBUG") == "1"
 
 def _find_ui() -> str:
-    """
-    Locate window.ui across common layouts:
-      - explicit override via SPRUCE_UI_PATH
-      - Flatpak/system share dir: /app/share/io.github.shonubot.Spruce/ui/window.ui
-      - alt share dir:            /app/share/spruce/ui/window.ui
-      - prefix-based installs:    <sys.prefix>/share/<APP_ID>/ui/window.ui, etc
-      - repo/dev layouts:         <repo>/ui/window.ui
-      - site-packages (last):     <site>/spruce/ui/window.ui
-    """
     override = os.environ.get("SPRUCE_UI_PATH")
     if override and Path(override).is_file():
         return override
@@ -48,18 +39,15 @@ def _find_ui() -> str:
     prefix = Path(sys.prefix)
 
     candidates = [
-        # Flatpak / system installs (prefer these)
         Path("/app/share") / APP_ID / "ui" / "window.ui",
         Path("/app/share") / "spruce" / "ui" / "window.ui",
         prefix / "share" / APP_ID / "ui" / "window.ui",
         prefix / "share" / "spruce" / "ui" / "window.ui",
 
-        # Dev / repo checkouts
-        here.parent.parent / "ui" / "window.ui",  # repo root /ui/window.ui
-        here.parent / "ui" / "window.ui",         # package-relative ui/
-        Path.cwd() / "ui" / "window.ui",          # run-from-cwd
+        here.parent.parent / "ui" / "window.ui",
+        here.parent / "ui" / "window.ui",
+        Path.cwd() / "ui" / "window.ui",
 
-        # Site-packages fallback (last)
         (Path(sys.modules.get("spruce").__file__).parent / "ui" / "window.ui") if "spruce" in sys.modules else Path("/nonexistent")
     ]
 
@@ -70,10 +58,7 @@ def _find_ui() -> str:
         except Exception:
             pass
 
-    # Final fallback: helpful error path (so the exception shows something useful)
     return str((prefix / "share" / APP_ID / "ui" / "window.ui"))
-
-
 
 def human_size(n: int) -> str:
     units = ("B", "KiB", "MiB", "GiB", "TiB", "PiB")
@@ -91,11 +76,11 @@ def xdg_data() -> Path:
     return Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share")))
 
 def trash_dir() -> Path:
-    """Return the user's trash directory following XDG spec."""
     return xdg_data() / "Trash"
 
+# This method sucks for now
+# TODO: Create one method where cache paths can be easily appended.
 def get_trash_size() -> int:
-    """Calculate total size of files in trash (host-aware)."""
     trash = trash_dir()
     files_dir = trash / "files"
     
@@ -114,7 +99,7 @@ def get_trash_size() -> int:
             pass
         return total_size
     
-    # For Flatpak, use host access
+    # To access host on Flatpak
     script = f"""
 import os, sys
 from pathlib import Path
@@ -185,6 +170,7 @@ def _host_list_dirs_with_sizes(base: Path) -> list[tuple[str, int]]:
                 pass
         return sorted(result, key=lambda t: t[1], reverse=True)
 
+    # Another script for Flatpak
     script = f"""
 import os, sys
 from pathlib import Path
@@ -287,7 +273,6 @@ def _host_rm_rf(path: Path) -> bool:
 
 def _disk_usage_home_host() -> Tuple[int, int, int] | None:
     """Return (total, used, free) for $HOME from the host using multiple fallbacks."""
-    # 1) Prefer df with explicit bytes
     code, out, _ = _run(_host_exec("bash", "-lc",
         'LANG=C df -B1 -P --output=size,used,avail "$HOME" | tail -n1'))
     if code == 0 and out.strip():
@@ -300,7 +285,7 @@ def _disk_usage_home_host() -> Tuple[int, int, int] | None:
             except Exception:
                 pass
 
-    # 2) Fallback to df -Pk (1K blocks → multiply by 1024)
+    # You never know when a utility might not be availible
     code, out, _ = _run(_host_exec("bash", "-lc",
         'LANG=C df -Pk --output=size,used,avail "$HOME" | tail -n1'))
     if code == 0 and out.strip():
@@ -347,12 +332,11 @@ def _gio_fs_usage(path: Path) -> Tuple[int, int, int] | None:
     return None
 
 def disk_usage_home() -> Tuple[int, int, int]:
-    # Prefer authoritative host numbers when sandboxed
     if IS_FLATPAK:
         host = _disk_usage_home_host()
         if host:
             return host
-    # Fallbacks (sandbox view)
+    # More fallbacks
     p = Path.home()
     ans = _gio_fs_usage(p)
     if ans:
@@ -568,17 +552,11 @@ def _pinned_from_remove_unused(scope: str) -> set[str]:
 
 def list_flatpak_unused_with_diag(win: Gtk.Widget) -> tuple[list[str], list[str], list[str]]:
     """
-    Parse `flatpak remove --unused` exactly as Flatpak prints it.
-    Handles:
-      - pinned runtimes section
-      - numbered removable rows (with tabs or Unicode spacing)
-      - proper architecture detection
-      - filters cosmetic/kept items
+    Parse `flatpak remove --unused`
     """
     diag: list[str] = []
     removable_all, pinned_all, kept_all = [], [], []
 
-    # Detect host architecture
     code, out, _ = _run(_host_exec("flatpak", "--default-arch"))
     arch = out.strip() if code == 0 and out.strip() else "x86_64"
 
@@ -586,6 +564,8 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> tuple[list[str], list[str]
         code, out, err = _run(
             _host_exec("bash", "-lc", f"printf 'n\\n' | flatpak remove --unused {scope}")
         )
+
+        # TODO: Always force english
         text = (out or err or "").strip()
         diag.append(f"\n[{scope}] flatpak remove --unused output:\n{text}\n")
 
@@ -597,26 +577,21 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> tuple[list[str], list[str]
             if not s:
                 continue
 
-            # detect pinned section
             if "These runtimes in installation" in s and "pinned" in s:
                 in_pinned, in_removable = True, False
                 continue
 
-            # detect table section (either header or numbered)
             if s.startswith("ID") and "Op" in s:
                 in_removable, in_pinned = True, False
                 continue
 
-            # if it's a numbered row like "1." or "2." we treat it as removable
             if re.match(r"^\d+\.", s):
                 in_removable, in_pinned = True, False
 
-            # stop sections
             if s.startswith(("Proceed", "Nothing")):
                 in_pinned = in_removable = False
                 continue
 
-            # pinned items
             if in_pinned:
                 ref = s.lstrip("*•- ").strip()
                 if ref.count("/") >= 2:
@@ -735,6 +710,7 @@ def _is_safe_target(p: Path) -> bool:
     try:
         rp = p.resolve()
         # Block root and critical system directories
+        # This might not seem neccesary right now, but I plan to add features that are very risky
         critical_paths = [Path("/"), Path("/home"), Path("/usr"), Path("/etc"), 
                          Path("/var"), Path("/bin"), Path("/sbin"), Path("/boot"),
                          Path("/sys"), Path("/proc"), Path("/dev")]
@@ -746,7 +722,6 @@ def _is_safe_target(p: Path) -> bool:
             except Exception:
                 pass
         
-        # Must be relative to home directory
         home = Path.home().resolve()
         if not rp.is_relative_to(home):
             return False
@@ -772,13 +747,12 @@ class SpruceWindow(Adw.ApplicationWindow):
         super().__init__(**kwargs)
 
         # Chart
+        # This sucks but I plan to improve it soon
         self.pie_chart.set_hexpand(True)
         self.pie_chart.set_vexpand(True)
         self.pie_chart.set_content_width(360)
         self.pie_chart.set_content_height(260)
         self.pie_chart.set_draw_func(self._draw_chart, None)
-
-        # Buttons
         self.clear_btn.connect("clicked", self._on_clear_clicked)
         self.options_btn.connect("clicked", self._on_options_clicked)
         self.remove_btn.connect("clicked", self._on_remove_clicked)
@@ -973,7 +947,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         g2.add(row)
         trash_path = str(trash_dir())
         row_trash = Adw.SwitchRow(
-            title="Trash sweep", subtitle=f"Empty trash bin — {trash_path}", active=self._opts["trash"]
+            title="Trash sweep", subtitle=f"Empty trash bin", active=self._opts["trash"]
         )
         row_trash.connect("notify::active", lambda r, *_: self._opts.__setitem__("trash", r.get_active()))
         g2.add(row_trash)
@@ -998,30 +972,22 @@ class SpruceWindow(Adw.ApplicationWindow):
                 p = Path(apath)
                 entries.append((p, sz, True, True, p.name))
 
-            # Host ~/.var/app/*/cache — label by app ID
             for apath, sz in _host_app_cache_entries():
                 p = Path(apath)
                 app_name = p.parent.name if p.name == "cache" else p.name
                 entries.append((p, sz, True, True, app_name))
 
-            # Sandbox ~/.cache/*
             for p, sz in _sandbox_first_level_cache_entries():
                 entries.append((p, sz, True, False, p.name))
-
-        # Add trash if enabled
+                
         if self._opts["trash"]:
             trash_size = get_trash_size()
-            # Use actual host path for display
             trash_path = Path.home() / ".local" / "share" / "Trash"
-            # Always show trash even if size is 0
             entries.append((trash_path, trash_size, True, True, "Trash bin"))
 
-        # Sort all entries by size (largest first)
         entries.sort(key=lambda t: t[1], reverse=True)
-
         GLib.idle_add(self._show_sweep_dialog, entries)
         return None
-
 
     def _show_sweep_dialog(self, entries: list[tuple[Path, int, bool, bool, str]]):
         if self._current_toast:
@@ -1080,9 +1046,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         def update_btn(*_a):
             rm_btn.set_sensitive(any(s.get_active() and s.get_sensitive() for s in toggles))
         for s in toggles:
-            s.connect("notify::active", update_btn)
-        
-        # Initial button state check
+            s.connect("notify::active", update_btn)        
         update_btn()
 
         def _set_all(active: bool):
@@ -1098,17 +1062,14 @@ class SpruceWindow(Adw.ApplicationWindow):
             for sw, p, can_delete, on_host in zip(toggles, paths, deletable, on_host_flags):
                 if not can_delete or not sw.get_active():
                     continue
-                
-                # Safety check: verify path is safe to delete
+    
                 if not _is_safe_target(p):
                     continue
-                
-                # Check if this is the trash directory
                 is_trash = str(p).endswith(".local/share/Trash") or p.name == "Trash"
-                
+
+                # Trash on host
                 if on_host:
                     if is_trash:
-                        # Special handling for trash on host
                         script = """
 import shutil
 from pathlib import Path
@@ -1134,7 +1095,7 @@ except Exception as e:
                 else:
                     try:
                         if is_trash:
-                            # Special handling for trash in sandbox
+                            # Trash in sandbox
                             files_dir = p / "files"
                             info_dir = p / "info"
                             if files_dir.exists():
@@ -1155,7 +1116,7 @@ except Exception as e:
             if host_targets:
                 for t in host_targets:
                     if not _is_allowed_host_target(t):
-                        continue  # safety: refuse out-of-scope deletions
+                        continue  # safety
                     if _host_rm_rf(t):
                         removed += 1
 
