@@ -6,11 +6,10 @@ It helps keep your system fresh by clearing unneeded caches, logs, temporary fil
 ### Features
 
 * **One-click cleaning** for APT, Flatpak, and thumbnail caches
-* **Smart cleanup** options that detect removable safely
+* **Smart cleanup** options that detect removable cache safely
 * **Live disk usage preview** before cleanup
-* **Adwaita-Dark inspired UI** with a green accent
+* **Adwaita inspired UI** with a green accent
 * **Lightweight** built with GTK4 + Libadwaita, under 1 MB
-* **Python-based** and easy to extend via modules
 
 ---
 
@@ -23,15 +22,6 @@ The recommended way to install Spruce is throught Flathub:<br>
 ```bash
 flatpak install flathub io.github.shonubot.Spruce
 ```
-Launch **Spruce** from your app menu
-
-You’ll see a minimal window with clear sections:
-
-* **Cache Cleaner** — remove APT, Flatpak, and thumbnail junk
-* **System Logs** — clear systemd journal files
-* **Temp Files** — purge /tmp and user-temp safely
-* **Preview Changes** — estimate disk space before cleaning
-
 
 ### Contributing
 
