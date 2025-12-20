@@ -1161,21 +1161,22 @@ except Exception as e:
         tw, th = layout.get_pixel_size(); set_hex(col_text, 0.95)
         cr.move_to(cx - tw/2, cy - th/2); PangoCairo.show_layout(cr, layout)
 
-        def rim_label(a_mid, txt, col):
-            set_hex(col); sx = cx + math.cos(a_mid)*(r-6); sy = cy + math.sin(a_mid)*(r-6)
-            ex = cx + math.cos(a_mid)*(r+14); ey = cy + math.sin(a_mid)*(r+14)
-            cr.set_line_width(2.0); cr.move_to(sx, sy); cr.line_to(ex, ey); cr.stroke()
+        def section_label(a_mid, txt, distance):
+            lx = cx + math.cos(a_mid) * distance
+            ly = cy + math.sin(a_mid) * distance
             layout = PangoCairo.create_layout(cr); layout.set_text(txt)
-            layout.set_font_description(Pango.FontDescription("Cantarell 12")); tw, th = layout.get_pixel_size()
-            tx = max(pad, min(w - pad - tw, ex + (8 if math.cos(a_mid) >= 0 else -tw - 8)))
-            ty = max(pad, min(h - pad - th, ey - th/2))
-            set_hex("#e8f3ff" if col == col_used else "#defcee")
-            cr.move_to(tx, ty); PangoCairo.show_layout(cr, layout)
+            layout.set_font_description(Pango.FontDescription("Cantarell Bold 13"))
+            tw, th = layout.get_pixel_size()
+            cr.set_source_rgba(1, 1, 1, 0.95)
+            cr.move_to(lx - tw/2, ly - th/2); PangoCairo.show_layout(cr, layout)
 
-        used_mid = start + used_ang/2 if used_ang > 0 else start
-        free_mid = start + used_ang + (2*math.pi - used_ang)/2
-        rim_label(used_mid, f"Used — {human_size(used)}", col_used)
-        rim_label(free_mid, f"Free — {human_size(free)}", col_free)
+        if used_ang > 0.2:
+            used_mid = start + used_ang/2
+            section_label(used_mid, f"Used\n{human_size(used)}", r * 0.65)
+        
+        if (2*math.pi - used_ang) > 0.2:
+            free_mid = start + used_ang + (2*math.pi - used_ang)/2
+            section_label(free_mid, f"Free\n{human_size(free)}", r * 0.65)
 
     def _toast(self, text: str):
         dlg = Adw.AlertDialog.new("Spruce", text)
