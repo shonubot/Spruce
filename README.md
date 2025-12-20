@@ -5,11 +5,12 @@ It helps keep your system fresh by clearing unneeded caches, logs, temporary fil
 
 ### Features
 
-* **One-click cleaning** for APT, Flatpak, and thumbnail caches
-* **Smart cleanup** options that detect removable cache safely
-* **Live disk usage preview** before cleanup
-* **Adwaita inspired UI** with a green accent
-* **Lightweight** built with GTK4 + Libadwaita, under 1 MB
+- **One-click cleaning** for APT, Flatpak, and thumbnail caches
+- **Smart cleanup** options that detect removable cache safely
+- **Live disk usage preview** before cleanup
+- **Adwaita inspired UI** with a green accent
+- **Lightweight** built with GTK4 + Libadwaita, under 1 MB
+- **Python-based** and easy to extend via modules
 
 ---
 
