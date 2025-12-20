@@ -40,6 +40,9 @@
 
 
   <releases>
+    <release version="0.1.5" date="2025-12-13">
+      <description><p>Fixed a issue where the unused packages preview would not show up correctly when English is not the default language and improved the pie chart labels.</p></description>
+    </release>
     <release version="0.1.4" date="2025-12-13">
       <description><p>Fixed a visual gap between the shaft and handle in the app icon. Fixed a GTK critical warning that occurred during cache cleanup and updated the application to the GNOME 49 runtime.</p></description>
     </release>
@@ -59,19 +62,19 @@
 
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/shonubot/Spruce/dadf8805c6b31089e445c19dc944bdbca35eb872/screenshots/Light/Spruce-main.png</image>
+      <image>https://raw.githubusercontent.com/shonubot/Spruce/dfa4abd6c14c8511d4117d18f27157129e2233ba/screenshots/Light/Spruce-main.png</image>
       <caption>Main view (Light theme)</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/shonubot/Spruce/dadf8805c6b31089e445c19dc944bdbca35eb872/screenshots/Light/Spruce-sweep.png</image>
+      <image>https://raw.githubusercontent.com/shonubot/Spruce/dfa4abd6c14c8511d4117d18f27157129e2233ba/screenshots/Light/Spruce-sweep.png</image>
       <caption>Cleaning menu (Light theme)</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/shonubot/Spruce/dadf8805c6b31089e445c19dc944bdbca35eb872/screenshots/Dark/Spruce-main.png</image>
+      <image>https://raw.githubusercontent.com/shonubot/Spruce/dfa4abd6c14c8511d4117d18f27157129e2233ba/screenshots/Dark/Spruce-main.png</image>
       <caption>Main view (Dark theme)</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/shonubot/Spruce/dadf8805c6b31089e445c19dc944bdbca35eb872/screenshots/Dark/Spruce-sweep.png</image>
+      <image>https://raw.githubusercontent.com/shonubot/Spruce/dfa4abd6c14c8511d4117d18f27157129e2233ba/screenshots/Dark/Spruce-sweep.png</image>
       <caption>Cleaning menu (Dark theme)</caption>
     </screenshot>
   </screenshots>
