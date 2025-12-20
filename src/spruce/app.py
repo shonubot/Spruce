@@ -524,7 +524,7 @@ def _pinned_from_remove_unused(scope: str) -> set[str]:
     and return normalized refs like 'runtime/org.gnome.Platform/x86_64/48'.
     We pipe 'n' so it never actually uninstalls.
     """
-    code, out, err = _run(_host_exec("bash", "-lc", f"printf 'n\n' | flatpak remove --unused {scope}"))
+    code, out, err = _run(_host_exec("bash", "-lc", f"LC_ALL=C printf 'n\n' | flatpak remove --unused {scope}"))
     text = out or err or ""
     pins: set[str] = set()
     capture = False
@@ -562,10 +562,9 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> tuple[list[str], list[str]
 
     for scope in ("--user", "--system"):
         code, out, err = _run(
-            _host_exec("bash", "-lc", f"printf 'n\\n' | flatpak remove --unused {scope}")
+            _host_exec("bash", "-lc", f"LC_ALL=C printf 'n\\n' | flatpak remove --unused {scope}")
         )
 
-        # TODO: Always force english
         text = (out or err or "").strip()
         diag.append(f"\n[{scope}] flatpak remove --unused output:\n{text}\n")
 
