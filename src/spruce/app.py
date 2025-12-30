@@ -875,16 +875,47 @@ class SpruceWindow(Adw.ApplicationWindow):
         confirmation.connect("response", on_response)
         confirmation.present(self)
     
+
     def _remove_packages_in_thread(self):
-        def _run_and_count(scope: str) -> int:
-            code, out, _err = _run(_host_exec("flatpak", "uninstall", "--unused", scope, "-y"))
-            return sum(1 for ln in (out or "").splitlines() if ln.strip().startswith("Uninstalling "))
+        def _run_and_count(scope:  str) -> tuple[int, bool, str]:
+            code, out, err = _run(_host_exec("flatpak", "uninstall", "--unused", scope, "-y"))
+            error_text = (err or "") + (out or "")
+            had_error = False
+            error_msg = ""
+            
+            if code != 0 or "Error:" in error_text or "error:" in error_text:
+                had_error = True
+                for line in error_text.splitlines():
+                    if "Error:" in line or "error:" in line:
+                        error_msg = line.strip()
+                        break
+                if not error_msg:
+                    error_msg = f"Command failed with exit code {code}"
+            
+            # This needs some work and must be improved
+            # It could detect it incorrectly
+            count = sum(1 for ln in (out or "").splitlines() if ln.strip().startswith("Uninstalling "))
+            
+            return count, had_error, error_msg
 
         removed = 0
-        try: removed += _run_and_count("--user")
-        except Exception: pass
-        try: removed += _run_and_count("--system")
-        except Exception: pass
+        errors = []
+        
+        try:
+            count, had_error, error_msg = _run_and_count("--user")
+            removed += count
+            if had_error:
+                errors. append(("user", error_msg))
+        except Exception as e:
+            errors. append(("user", str(e)))
+            
+        try:
+            count, had_error, error_msg = _run_and_count("--system")
+            removed += count
+            if had_error:
+                errors.append(("system", error_msg))
+        except Exception as e:
+            errors.append(("system", str(e)))
         
         def _after():
             if self._current_toast:
@@ -897,9 +928,26 @@ class SpruceWindow(Adw.ApplicationWindow):
             win = app.props.active_window if app else None
             if win and hasattr(win, "_toast"):
                 try:
-                    win._toast(f"Removed {removed} item(s)" if removed > 0
-                               else "Flatpak reported nothing unused to uninstall")
-                except Exception:
+                    if errors: 
+                        error_details = "\n\n".join([f"[{scope}] {msg}" for scope, msg in errors])
+                        dlg = Adw.AlertDialog.new(
+                            "Failed to remove packages",
+                            f"Flatpak encountered errors during removal:\n\n{error_details}\n\n"
+                            "If this issue persists, please report it on GitHub:\n"
+                            "https://github.com/shonubot/Spruce/issues"
+                        )
+                        dlg.add_response("ok", "OK")
+                        dlg. set_default_response("ok")
+                        dlg.present(win)
+                        
+                        # Also show count if some were removed despite errors
+                        if removed > 0:
+                            GLib.timeout_add(100, lambda: win._toast(f"Partially completed:  Removed {removed} item(s)"))
+                    elif removed > 0:
+                        win._toast(f"Removed {removed} item(s)")
+                    else:
+                        win._toast("Flatpak reported nothing unused to uninstall")
+                except Exception: 
                     pass
             return GLib.SOURCE_REMOVE
         
