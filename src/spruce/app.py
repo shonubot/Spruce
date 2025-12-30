@@ -877,12 +877,11 @@ class SpruceWindow(Adw.ApplicationWindow):
     
 
     def _remove_packages_in_thread(self):
-        def _run_and_count(scope:  str) -> tuple[int, bool, str]:
+        def _run_and_count(scope: str) -> tuple[int, bool, str]:
             code, out, err = _run(_host_exec("flatpak", "uninstall", "--unused", scope, "-y"))
             error_text = (err or "") + (out or "")
             had_error = False
             error_msg = ""
-            
             if code != 0 or "Error:" in error_text or "error:" in error_text:
                 had_error = True
                 for line in error_text.splitlines():
@@ -891,25 +890,20 @@ class SpruceWindow(Adw.ApplicationWindow):
                         break
                 if not error_msg:
                     error_msg = f"Command failed with exit code {code}"
-            
-            # This needs some work and must be improved
-            # It could detect it incorrectly
+
             count = sum(1 for ln in (out or "").splitlines() if ln.strip().startswith("Uninstalling "))
-            
             return count, had_error, error_msg
 
         removed = 0
         initial_used_space = disk_usage_home()[1]
         errors = []
-        
         try:
             count, had_error, error_msg = _run_and_count("--user")
             removed += count
             if had_error:
-                errors. append(("user", error_msg))
+                errors.append(("user", error_msg))
         except Exception as e:
-            errors. append(("user", str(e)))
-            
+            errors.append(("user", str(e)))
         try:
             count, had_error, error_msg = _run_and_count("--system")
             removed += count
@@ -919,42 +913,43 @@ class SpruceWindow(Adw.ApplicationWindow):
             errors.append(("system", str(e)))
         final_used_space = disk_usage_home()[1]
         freed_space = max(0, initial_used_space - final_used_space)
-        
-        def _after(freed_space: int):
+        freed_str = human_size(freed_space)
+
+        def _after():
             if self._current_toast:
                 self._current_toast.close()
                 self._current_toast = None
-            
+
             self._refresh_autoremove_label()
-            
+
             app = Gtk.Application.get_default()
             win = app.props.active_window if app else None
-            if win and hasattr(win, "_toast"):
-                try:
-                    if errors: 
-                        error_details = "\n\n".join([f"[{scope}] {msg}" for scope, msg in errors])
+            try:
+                if errors:
+                    error_details = "\n\n".join([f"[{scope}] {msg}" for scope, msg in errors])
+                    if removed == 0:
                         dlg = Adw.AlertDialog.new(
                             "Failed to remove packages",
                             f"Flatpak encountered errors during removal:\n\n{error_details}\n\n"
+                            "No packages were removed, and no space was freed.\n\n"
                             "If this issue persists, please report it on GitHub:\n"
                             "https://github.com/shonubot/Spruce/issues"
                         )
                         dlg.add_response("ok", "OK")
-                        dlg. set_default_response("ok")
+                        dlg.set_default_response("ok")
                         dlg.present(win)
-                        
-                        # Also show count if some were removed despite errors
-                        if removed > 0:
-                            GLib.timeout_add(100, lambda: win._toast(f"Partially completed:  Removed {removed} item(s) and freed {human_size(freed_space)}"))
-                    elif removed > 0:
-                        win._toast(f"Removed {removed} item(s) with a total of {human_size(freed_space)} space freed.")
                     else:
-                        win._toast("Flatpak reported nothing unused to uninstall")
-                except Exception: 
-                    pass
+                        # Only one popup; show partial result as a toast
+                        win._toast(f"Partially removed {removed} item(s), freed {freed_str}. Some errors occurred.")
+                elif removed > 0:
+                    win._toast(f"Removed {removed} item(s), freeing {freed_str}.")
+                else:
+                    win._toast("Flatpak reported nothing unused to uninstall")
+            except Exception:
+                pass
             return GLib.SOURCE_REMOVE
-        
-        GLib.idle_add(_after, freed_space)
+
+        GLib.idle_add(_after)
         return None
 
     def _on_clear_clicked(self, _btn):
