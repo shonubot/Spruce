@@ -40,6 +40,9 @@
 
 
   <releases>
+     <release version="0.1.6" date="2025-12-30">
+      <description><p>Improved error handling when clearing unused packages, added a mention of freed space after removing a unused package or clearing caches and updated the window subtitle.</p></description>
+    </release>
     <release version="0.1.5" date="2025-12-20">
       <description><p>Fixed a issue where the unused packages preview would not show up correctly when English is not the default language and improved the pie chart labels.</p></description>
     </release>
