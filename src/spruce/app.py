@@ -547,7 +547,6 @@ def _pinned_from_remove_unused(scope: str) -> set[str]:
             capture = True
             continue
         if capture:
-            # Stop when we hit the next section/prompt
             if s.startswith("Proceed ") or s.startswith("Nothing "):
                 capture = False
                 continue
@@ -926,7 +925,7 @@ class SpruceWindow(Adw.ApplicationWindow):
             win = app.props.active_window if app else None
             try:
                 if errors:
-                    error_details = "\n\n".join([f"[{scope}] {msg}" for scope, msg in errors])
+                    error_details = "\n".join([f"[{scope}] {msg}" for scope, msg in errors])
                     if removed == 0:
                         dlg = Adw.AlertDialog.new(
                             "Failed to remove packages",
@@ -939,8 +938,10 @@ class SpruceWindow(Adw.ApplicationWindow):
                         dlg.set_default_response("ok")
                         dlg.present(win)
                     else:
-                        # Only one popup; show partial result as a toast
-                        win._toast(f"Partially removed {removed} item(s), freed {freed_str}. Some errors occurred.")
+                        win._toast(
+                            f"Partially removed {removed} item(s), freed {freed_str}.\n"
+                            f"Errors:\n{error_details}"
+                        )
                 elif removed > 0:
                     win._toast(f"Removed {removed} item(s), freeing {freed_str}.")
                 else:
