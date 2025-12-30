@@ -843,7 +843,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         listbox.append(title)
 
         if not self._last_hidden:
-            listbox.append(Gtk.Label(label="— none —", xalign=0))
+            listbox.append(Gtk.Label(label="none", xalign=0))
         else:
             for ref in self._last_hidden:
                 listbox.append(Adw.ActionRow(title=ref))
@@ -899,6 +899,7 @@ class SpruceWindow(Adw.ApplicationWindow):
             return count, had_error, error_msg
 
         removed = 0
+        initial_used_space = disk_usage_home()[1]
         errors = []
         
         try:
@@ -916,8 +917,10 @@ class SpruceWindow(Adw.ApplicationWindow):
                 errors.append(("system", error_msg))
         except Exception as e:
             errors.append(("system", str(e)))
+        final_used_space = disk_usage_home()[1]
+        freed_space = max(0, initial_used_space - final_used_space)
         
-        def _after():
+        def _after(freed_space: int):
             if self._current_toast:
                 self._current_toast.close()
                 self._current_toast = None
@@ -942,16 +945,16 @@ class SpruceWindow(Adw.ApplicationWindow):
                         
                         # Also show count if some were removed despite errors
                         if removed > 0:
-                            GLib.timeout_add(100, lambda: win._toast(f"Partially completed:  Removed {removed} item(s)"))
+                            GLib.timeout_add(100, lambda: win._toast(f"Partially completed:  Removed {removed} item(s) and freed {human_size(freed_space)}"))
                     elif removed > 0:
-                        win._toast(f"Removed {removed} item(s)")
+                        win._toast(f"Removed {removed} item(s) with a total of {human_size(freed_space)} space freed.")
                     else:
                         win._toast("Flatpak reported nothing unused to uninstall")
                 except Exception: 
                     pass
             return GLib.SOURCE_REMOVE
         
-        GLib.idle_add(_after)
+        GLib.idle_add(_after, freed_space)
         return None
 
     def _on_clear_clicked(self, _btn):
@@ -959,8 +962,11 @@ class SpruceWindow(Adw.ApplicationWindow):
             self._current_toast = self._toast("Scanning cache directories...")
             GLib.Thread.new("cache_scanner", self._scan_cache_in_thread)
         else:
+            initial_used_space = disk_usage_home()[1]
             if self._perform_instant_clears():
-                self._toast("Selected caches cleared")
+                final_used_space = disk_usage_home()[1]
+                freed_space = max(0, initial_used_space - final_used_space)
+                self._toast(f"Selected caches cleared, freeing {human_size(freed_space)}")
                 self.pie_chart.queue_draw()
 
     def _perform_instant_clears(self):
@@ -1084,7 +1090,7 @@ class SpruceWindow(Adw.ApplicationWindow):
             loc = "host" if on_host else "sandbox"
             row = Adw.ActionRow(
                 title=display_name,
-                subtitle=f"{p} ({loc}) — {human_size(sz)}"
+                subtitle=f"{p} ({loc}) - {human_size(sz)}"
             )
             sw = Gtk.Switch(valign=Gtk.Align.CENTER, sensitive=can_delete)
             row.add_suffix(sw)
@@ -1115,6 +1121,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         sel_all.connect("toggled", lambda b: _set_all(b.get_active()))
 
         def do_rm(_b):
+            initial_used_space = disk_usage_home()[1]
             removed = 0
             host_targets: list[Path] = []
             for sw, p, can_delete, on_host in zip(toggles, paths, deletable, on_host_flags):
@@ -1179,7 +1186,9 @@ except Exception as e:
                         removed += 1
 
             if removed:
-                self._toast(f"Removed {removed} item(s)")
+                final_used_space = disk_usage_home()[1]
+                freed_space = max(0, initial_used_space - final_used_space)
+                self._toast(f"Removed {removed} item(s), freeing {human_size(freed_space)}")
                 self.pie_chart.queue_draw()
             dlg.close()
 
