@@ -11,7 +11,7 @@ template $SpruceWindow : Adw.ApplicationWindow {
     Adw.HeaderBar {
       title-widget: Adw.WindowTitle {
         title: "Spruce";
-        subtitle: "Free up disk space";
+        subtitle: "Reclaim disk space";
       };
     }
 
@@ -26,7 +26,6 @@ template $SpruceWindow : Adw.ApplicationWindow {
         margin-start: 24;
         margin-end: 24;
 
-        /* LEFT column — storage pie chart card */
         Gtk.Box {
           orientation: vertical;
           spacing: 12;
@@ -52,13 +51,11 @@ template $SpruceWindow : Adw.ApplicationWindow {
           }
         }
 
-        /* RIGHT column — buttons + packages card + info rows */
         Gtk.Box {
           orientation: vertical;
           spacing: 18;
           hexpand: true;
 
-          /* top buttons */
           Gtk.Box {
             spacing: 12;
 
@@ -75,7 +72,6 @@ template $SpruceWindow : Adw.ApplicationWindow {
             }
           }
 
-          /* packages card */
           Gtk.Frame {
             css-classes: ["card"];
             hexpand: true;
@@ -115,7 +111,6 @@ template $SpruceWindow : Adw.ApplicationWindow {
             };
           }
 
-          /* info rows – keep plain text, escape angle brackets */
           Adw.ActionRow {
             title: "App caches";
             subtitle: "~/.cache/&lt;app&gt;, ~/.var/app/*/cache";

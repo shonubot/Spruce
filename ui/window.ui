@@ -17,7 +17,7 @@ corresponding .blp file and regenerate this file with blueprint-compiler.
             <property name="title-widget">
               <object class="AdwWindowTitle">
                 <property name="title">Spruce</property>
-                <property name="subtitle">Free up disk space</property>
+                <property name="subtitle">Reclaim disk space</property>
               </object>
             </property>
           </object>
