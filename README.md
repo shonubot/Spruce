@@ -36,7 +36,7 @@ We welcome contributions and improvements!
 
 ### License
 
-Spruce is licensed under the **GNU GPL v3.0**.
+Spruce is licensed under the **GNU GPL v3.0 or later**.
 You’re free to use, modify, and redistribute it under the same terms.
 
 ---
