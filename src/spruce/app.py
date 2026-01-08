@@ -809,6 +809,7 @@ class SpruceWindow(Adw.ApplicationWindow):
             developer_name="Kavish Advani",
             application_icon="io.github.shonubot.Spruce", 
             comments="Spruce is a lightweight cache cleaner and system maintenance tool designed for GNU/Linux. It helps keep your system fresh by clearing unneeded caches, logs, and temporary files in a clean, Adwaita-based GTK interface.",
+            issue_url="https://github.com/shonubot/Spruce/issues", # For some reason, the issue report button is always shown below the details button
             license_type=Gtk.License.GPL_3_0,
             website="https://github.com/shonubot/Spruce",
             copyright="© 2026 Kavish Advani"
