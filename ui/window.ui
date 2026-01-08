@@ -13,7 +13,7 @@ corresponding .blp file and regenerate this file with blueprint-compiler.
     <property name="content">
       <object class="AdwToolbarView">
         <child type="top">
-          <object class="AdwHeaderBar">
+          <object class="AdwHeaderBar" id="header_bar">
             <property name="title-widget">
               <object class="AdwWindowTitle">
                 <property name="title">Spruce</property>

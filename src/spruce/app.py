@@ -312,7 +312,7 @@ def _disk_usage_home_host() -> Tuple[int, int, int] | None:
             except Exception:
                 pass
 
-    # 3) Fallback to stat -f (block size * counts)
+    # Fallback to stat -f (block size * counts)
     code, out, _ = _run(_host_exec("bash", "-lc",
         'stat -f --format="%S %b %a" "$HOME"'))
     if code == 0 and out.strip():
@@ -534,7 +534,6 @@ def _pinned_from_remove_unused(scope: str) -> set[str]:
     """
     Ask flatpak what it would remove, capture the 'pinned' section,
     and return normalized refs like 'runtime/org.gnome.Platform/x86_64/48'.
-    We pipe 'n' so it never actually uninstalls.
     """
     code, out, err = _run(_host_exec("bash", "-lc", f"LC_ALL=C printf 'n\n' | flatpak remove --unused {scope}"))
     text = out or err or ""
@@ -752,6 +751,7 @@ class SpruceWindow(Adw.ApplicationWindow):
     options_btn: Gtk.Button = Gtk.Template.Child("options_btn")
     pkg_list: Gtk.Label = Gtk.Template.Child("pkg_list")
     remove_btn: Gtk.Button = Gtk.Template.Child("remove_btn")
+    header_bar: Adw.HeaderBar = Gtk.Template.Child("header_bar")
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -790,6 +790,29 @@ class SpruceWindow(Adw.ApplicationWindow):
         # Initial UI
         self._refresh_autoremove_label()
         self.pie_chart.queue_draw()
+        
+        # Add about button to header bar
+        about_btn = Gtk.Button()
+        about_btn.set_icon_name("dialog-information-symbolic") # I don't like this icon a lot but I can's find any better ones that fit it
+        about_btn.set_tooltip_text("About Spruce")
+        about_btn.remove_css_class("image-button")
+        about_btn.add_css_class("flat")
+        about_btn.connect("clicked", self.show_about)
+        self.header_bar.pack_end(about_btn)
+    
+    def show_about(self, button):
+        about = Adw.AboutWindow(
+            application=self.get_application(),
+            application_name="Spruce",
+            version="1.0.6",
+            developer_name="Kavish Advani",
+            application_icon="io.github.shonubot.Spruce", 
+            comments="Reclaim Disk Space",
+            license_type=Gtk.License.GPL_3_0,
+            website="https://github.com/shonubot/Spruce",
+            copyright="© 2026 Kavish Advani"
+        )
+        about.present()
 
     def _refresh_autoremove_label(self):
         if self.timeout_source:
@@ -1252,6 +1275,7 @@ class SpruceApp(Adw.Application):
     def __init__(self):
         super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.FLAGS_NONE)
         Adw.init()
+        
     def do_activate(self):
         (self.props.active_window or SpruceWindow(application=self)).present()
 
