@@ -808,7 +808,7 @@ class SpruceWindow(Adw.ApplicationWindow):
             version=VERSION,
             developer_name="Kavish Advani",
             application_icon="io.github.shonubot.Spruce", 
-            comments="Reclaim Disk Space",
+            comments="Spruce is a lightweight cache cleaner and system maintenance tool designed for GNU/Linux. It helps keep your system fresh by clearing unneeded caches, logs, and temporary files in a clean, Adwaita-based GTK interface.",
             license_type=Gtk.License.GPL_3_0,
             website="https://github.com/shonubot/Spruce",
             copyright="© 2026 Kavish Advani"
