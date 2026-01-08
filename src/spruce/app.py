@@ -41,6 +41,7 @@ except Exception:
 APP_ID = "io.github.shonubot.Spruce"
 IS_FLATPAK = Path("/.flatpak-info").exists()
 SPRUCE_DEBUG = os.environ.get("SPRUCE_DEBUG") == "1"
+VERSION = "0.1.6" # DONT FORGET TO UPDATE
 
 def _find_ui() -> str:
     override = os.environ.get("SPRUCE_UI_PATH")
@@ -804,7 +805,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         about = Adw.AboutWindow(
             application=self.get_application(),
             application_name="Spruce",
-            version="1.0.6",
+            version=VERSION,
             developer_name="Kavish Advani",
             application_icon="io.github.shonubot.Spruce", 
             comments="Reclaim Disk Space",
