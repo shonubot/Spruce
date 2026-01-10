@@ -23,6 +23,8 @@ import math
 import shutil
 import sys
 import shlex
+import locale
+import gettext
 from pathlib import Path
 from typing import List, Tuple
 
@@ -42,6 +44,20 @@ APP_ID = "io.github.shonubot.Spruce"
 IS_FLATPAK = Path("/.flatpak-info").exists()
 SPRUCE_DEBUG = os.environ.get("SPRUCE_DEBUG") == "1"
 VERSION = "0.1.6" # DONT FORGET TO UPDATE
+
+# Initialize translations
+try:
+    locale.setlocale(locale.LC_ALL, '')
+    locale_dir = None
+    for path in [Path("/app/share/locale"), Path(sys.prefix) / "share" / "locale"]:
+        if path.is_dir():
+            locale_dir = str(path)
+            break
+    gettext.bindtextdomain('spruce', locale_dir)
+    gettext.textdomain('spruce')
+    _ = gettext.gettext
+except Exception:
+    _ = lambda s: s
 
 def _find_ui() -> str:
     override = os.environ.get("SPRUCE_UI_PATH")
@@ -770,7 +786,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         self.timeout_source = None
 
         # Add a small "What's hidden?" button next to Remove
-        self.kept_btn = Gtk.Button(label="What's hidden?")
+        self.kept_btn = Gtk.Button(label=_("What's hidden?"))
         self.kept_btn.set_has_frame(True)
         self.kept_btn.set_valign(Gtk.Align.CENTER)
         self.kept_btn.set_sensitive(False)
@@ -795,7 +811,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         # Add about button to header bar
         about_btn = Gtk.Button()
         about_btn.set_icon_name("dialog-information-symbolic") # I don't like this icon a lot but I can's find any better ones that fit it
-        about_btn.set_tooltip_text("About Spruce")
+        about_btn.set_tooltip_text(_("About Spruce"))
         about_btn.remove_css_class("image-button")
         about_btn.add_css_class("flat")
         about_btn.connect("clicked", self.show_about)
@@ -831,10 +847,10 @@ class SpruceWindow(Adw.ApplicationWindow):
         self._last_hidden = combined
 
         if not removable:
-            self.pkg_list.set_text("Nothing unused to uninstall")
+            self.pkg_list.set_text(_("Nothing unused to uninstall"))
             self.remove_btn.set_sensitive(False)
         else:
-            self.pkg_list.set_text("Removable: " + " ".join(removable))
+            self.pkg_list.set_text(_("Removable: ") + " ".join(removable))
             self.remove_btn.set_sensitive(True)
         self.kept_btn.set_sensitive(bool(self._last_hidden))
 
@@ -842,7 +858,7 @@ class SpruceWindow(Adw.ApplicationWindow):
 
     def _on_show_kept_clicked(self, _btn):
         dlg = Adw.Dialog.new()
-        dlg.set_title("Hidden items")
+        dlg.set_title(_("Hidden items"))
         dlg.present(self)
         dlg.set_content_width(560)
         dlg.set_content_height(420)
@@ -852,7 +868,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         v.set_margin_top(12); v.set_margin_bottom(12); v.set_margin_start(12); v.set_margin_end(12)
 
         intro = Gtk.Label(
-            label=("These items are hidden from removal because they're either pinned by Flatpak "
+            label=_("These items are hidden from removal because they're either pinned by Flatpak "
                    "or kept for safety (e.g., base Platforms/Locales, SDKs, or essential extensions)."),
             xalign=0
         )
@@ -863,17 +879,17 @@ class SpruceWindow(Adw.ApplicationWindow):
         listbox = Gtk.ListBox(); listbox.set_selection_mode(Gtk.SelectionMode.NONE)
         sc.set_child(listbox); v.append(sc)
 
-        title = Gtk.Label(label="Hidden (pinned or safety-kept)", xalign=0)
+        title = Gtk.Label(label=_("Hidden (pinned or safety-kept)"), xalign=0)
         title.add_css_class("title-4")
         listbox.append(title)
 
         if not self._last_hidden:
-            listbox.append(Gtk.Label(label="none", xalign=0))
+            listbox.append(Gtk.Label(label=_("none"), xalign=0))
         else:
             for ref in self._last_hidden:
                 listbox.append(Adw.ActionRow(title=ref))
 
-        close_btn = Gtk.Button(label="Close")
+        close_btn = Gtk.Button(label=_("Close"))
         close_btn.connect("clicked", lambda *_: dlg.close())
         v.append(close_btn)
 
@@ -883,18 +899,18 @@ class SpruceWindow(Adw.ApplicationWindow):
 
     def _on_remove_clicked(self, _btn):
         confirmation = Adw.AlertDialog.new(
-            "Remove unused packages?",
-            "This will uninstall unused Flatpak runtimes. This operation might take a while."
+            _("Remove unused packages?"),
+            _("This will uninstall unused Flatpak runtimes. This operation might take a while.")
         )
-        confirmation.add_response("cancel", "Cancel")
-        confirmation.add_response("continue", "Continue")
+        confirmation.add_response("cancel", _("Cancel"))
+        confirmation.add_response("continue", _("Continue"))
         confirmation.set_response_appearance("continue", Adw.ResponseAppearance.SUGGESTED)
         confirmation.set_default_response("cancel")
         confirmation.set_close_response("cancel")
         
         def on_response(_dialog, response):
             if response == "continue":
-                self._current_toast = self._toast("Removing packages... (This might take a while)")
+                self._current_toast = self._toast(_("Removing packages... (This might take a while)"))
                 GLib.Thread.new("package_remover", self._remove_packages_in_thread)
         
         confirmation.connect("response", on_response)
@@ -954,24 +970,23 @@ class SpruceWindow(Adw.ApplicationWindow):
                     error_details = "\n".join([f"[{scope}] {msg}" for scope, msg in errors])
                     if removed == 0:
                         dlg = Adw.AlertDialog.new(
-                            "Failed to remove packages",
-                            f"Flatpak encountered errors during removal:\n\n{error_details}\n\n"
+                            _("Failed to remove packages"),
+                            _("Flatpak encountered errors during removal:\n\n{}\n\n"
                             "No packages were removed, and no space was freed.\n\n"
                             "If this issue persists, please report it on GitHub:\n"
-                            "https://github.com/shonubot/Spruce/issues"
+                            "https://github.com/shonubot/Spruce/issues").format(error_details)
                         )
                         dlg.add_response("ok", "OK")
                         dlg.set_default_response("ok")
                         dlg.present(win)
                     else:
                         win._toast(
-                            f"Partially removed {removed} item(s), freed {freed_str}.\n"
-                            f"Errors:\n{error_details}"
+                            _("Partially removed {} item(s), freed {}.\nErrors:\n{}").format(removed, freed_str, error_details)
                         )
                 elif removed > 0:
-                    win._toast(f"Removed {removed} item(s), freeing {freed_str}.")
+                    win._toast(_("Removed {} item(s), freeing {}.").format(removed, freed_str))
                 else:
-                    win._toast("Flatpak reported nothing unused to uninstall")
+                    win._toast(_("Flatpak reported nothing unused to uninstall"))
             except Exception:
                 pass
             return GLib.SOURCE_REMOVE
@@ -981,14 +996,14 @@ class SpruceWindow(Adw.ApplicationWindow):
 
     def _on_clear_clicked(self, _btn):
         if self._opts["sweep"] or self._opts["trash"]:
-            self._current_toast = self._toast("Scanning cache directories...")
+            self._current_toast = self._toast(_("Scanning cache directories..."))
             GLib.Thread.new("cache_scanner", self._scan_cache_in_thread)
         else:
             initial_used_space = disk_usage_home()[1]
             if self._perform_instant_clears():
                 final_used_space = disk_usage_home()[1]
                 freed_space = max(0, initial_used_space - final_used_space)
-                self._toast(f"Selected caches cleared, freeing {human_size(freed_space)}")
+                self._toast(_("Selected caches cleared, freeing {}").format(human_size(freed_space)))
                 self.pie_chart.queue_draw()
 
     def _perform_instant_clears(self):
@@ -1009,9 +1024,9 @@ class SpruceWindow(Adw.ApplicationWindow):
         return removed
 
     def _on_options_clicked(self, _btn):
-        win = Adw.PreferencesWindow(transient_for=self, modal=True, title="Preferences")
+        win = Adw.PreferencesWindow(transient_for=self, modal=True, title=_("Preferences"))
         page = Adw.PreferencesPage()
-        group = Adw.PreferencesGroup(title='What to clear when you press "Clear temp"')
+        group = Adw.PreferencesGroup(title=_('What to clear when you press "Clear temp"'))
         page.add(group)
 
         def add_switch(title, subtitle, key):
@@ -1024,16 +1039,16 @@ class SpruceWindow(Adw.ApplicationWindow):
         add_switch("Fontconfig cache", "~/.cache/fontconfig", "fontconf")
         add_switch("Mesa shader cache", "~/.cache/mesa_shader_cache", "mesa")
 
-        g2 = Adw.PreferencesGroup(title="General")
+        g2 = Adw.PreferencesGroup(title=_("General"))
         page.add(g2)
         row = Adw.SwitchRow(
-            title="General cache sweep", subtitle="Pick large items in ~/.cache to remove", active=self._opts["sweep"]
+            title=_("General cache sweep"), subtitle=_("Pick large items in ~/.cache to remove"), active=self._opts["sweep"]
         )
         row.connect("notify::active", lambda r, *_: self._opts.__setitem__("sweep", r.get_active()))
         g2.add(row)
         trash_path = str(trash_dir())
         row_trash = Adw.SwitchRow(
-            title="Trash sweep", subtitle=f"Empty trash bin", active=self._opts["trash"]
+            title=_("Trash sweep"), subtitle=_("Empty trash bin"), active=self._opts["trash"]
         )
         row_trash.connect("notify::active", lambda r, *_: self._opts.__setitem__("trash", r.get_active()))
         g2.add(row_trash)
@@ -1081,7 +1096,7 @@ class SpruceWindow(Adw.ApplicationWindow):
             self._current_toast = None
 
         dlg = Adw.Dialog.new()
-        dlg.set_title("Cache sweep")
+        dlg.set_title(_("Cache sweep"))
         dlg.present(self)
         dlg.set_content_width(720)
         dlg.set_content_height(520)
@@ -1093,7 +1108,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         v.set_margin_start(12)
         v.set_margin_end(12)
 
-        title = Gtk.Label(label="Select the cache files to remove:", xalign=0)
+        title = Gtk.Label(label=_("Select the cache files to remove:"), xalign=0)
         title.add_css_class("title-4")
         v.append(title)
 
@@ -1123,8 +1138,8 @@ class SpruceWindow(Adw.ApplicationWindow):
             on_host_flags.append(on_host)
 
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        sel_all = Gtk.CheckButton(label="Select all")
-        rm_btn = Gtk.Button(label="Remove selected", sensitive=False)
+        sel_all = Gtk.CheckButton(label=_("Select all"))
+        rm_btn = Gtk.Button(label=_("Remove selected"), sensitive=False)
         actions.append(sel_all)
         actions.append(rm_btn)
         v.append(actions)
@@ -1210,7 +1225,7 @@ except Exception as e:
             if removed:
                 final_used_space = disk_usage_home()[1]
                 freed_space = max(0, initial_used_space - final_used_space)
-                self._toast(f"Removed {removed} item(s), freeing {human_size(freed_space)}")
+                self._toast(_("Removed {} item(s), freeing {}").format(removed, human_size(freed_space)))
                 self.pie_chart.queue_draw()
             dlg.close()
 
@@ -1225,7 +1240,7 @@ except Exception as e:
     def _draw_chart(self, _area, cr, w: int, h: int, _data):
         if cairo is None:
             layout = PangoCairo.create_layout(cr)
-            layout.set_text("Cairo not available; chart disabled")
+            layout.set_text(_("Cairo not available; chart disabled"))
             layout.set_font_description(Pango.FontDescription("Cantarell 14"))
             cr.set_source_rgba(1, 1, 1, 0.8)
             tw, th = layout.get_pixel_size()
@@ -1262,11 +1277,11 @@ except Exception as e:
 
         if used_ang > 0.2:
             used_mid = start + used_ang/2
-            section_label(used_mid, f"Used\n{human_size(used)}", r * 0.65)
+            section_label(used_mid, _("Used\n{}").format(human_size(used)), r * 0.65)
         
         if (2*math.pi - used_ang) > 0.2:
             free_mid = start + used_ang + (2*math.pi - used_ang)/2
-            section_label(free_mid, f"Free\n{human_size(free)}", r * 0.65)
+            section_label(free_mid, _("Free\n{}").format(human_size(free)), r * 0.65)
 
     def _toast(self, text: str):
         dlg = Adw.AlertDialog.new("Spruce", text)

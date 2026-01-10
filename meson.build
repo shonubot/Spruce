@@ -26,3 +26,5 @@ install_data('data/bin/spruce',
   install_mode: 'rwxr-xr-x'
 )
 
+subdir('po')
+
