@@ -3,3 +3,4 @@
 /.flatpak-build/
 __pycache__
 /_build/
+*.pot
