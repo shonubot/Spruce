@@ -100,10 +100,28 @@ corresponding .blp file and regenerate this file with blueprint-compiler.
                             <property name="margin-start">16</property>
                             <property name="margin-end">16</property>
                             <child>
-                              <object class="GtkLabel">
-                                <property name="label">These packages are no longer required</property>
-                                <property name="css-classes">title-3</property>
-                                <property name="halign">1</property>
+                              <object class="GtkBox">
+                                <property name="orientation">0</property>
+                                <property name="spacing">12</property>
+                                <child>
+                                  <object class="GtkLabel">
+                                    <property name="label">These packages are no longer required</property>
+                                    <property name="css-classes">title-3</property>
+                                    <property name="halign">1</property>
+                                    <property name="hexpand">true</property>
+                                  </object>
+                                </child>
+                                <child>
+                                  <object class="GtkButton" id="kept_btn">
+                                    <property name="icon-name">help-about-symbolic</property>
+                                    <property name="css-classes">flat
+circular</property>
+                                    <property name="halign">2</property>
+                                    <property name="valign">3</property>
+                                    <property name="tooltip-text">What's hidden?</property>
+                                    <property name="sensitive">false</property>
+                                  </object>
+                                </child>
                               </object>
                             </child>
                             <child>

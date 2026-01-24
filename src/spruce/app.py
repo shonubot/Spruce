@@ -768,6 +768,7 @@ class SpruceWindow(Adw.ApplicationWindow):
     options_btn: Gtk.Button = Gtk.Template.Child("options_btn")
     pkg_list: Gtk.Label = Gtk.Template.Child("pkg_list")
     remove_btn: Gtk.Button = Gtk.Template.Child("remove_btn")
+    kept_btn: Gtk.Button = Gtk.Template.Child("kept_btn")
     header_bar: Adw.HeaderBar = Gtk.Template.Child("header_bar")
 
     def __init__(self, **kwargs):
@@ -783,20 +784,8 @@ class SpruceWindow(Adw.ApplicationWindow):
         self.clear_btn.connect("clicked", self._on_clear_clicked)
         self.options_btn.connect("clicked", self._on_options_clicked)
         self.remove_btn.connect("clicked", self._on_remove_clicked)
-        self.timeout_source = None
-
-        # Add a small "What's hidden?" button next to Remove
-        self.kept_btn = Gtk.Button(label=_("What's hidden?"))
-        self.kept_btn.set_has_frame(True)
-        self.kept_btn.set_valign(Gtk.Align.CENTER)
-        self.kept_btn.set_sensitive(False)
         self.kept_btn.connect("clicked", self._on_show_kept_clicked)
-        try:
-            parent = self.remove_btn.get_parent()
-            if isinstance(parent, Gtk.Box):
-                parent.append(self.kept_btn)
-        except Exception:
-            pass
+        self.timeout_source = None
 
         self._opts = {"thumbs": True, "webkit": True, "fontconf": True, "mesa": True, "sweep": True, "trash": True}
         self._current_toast = None

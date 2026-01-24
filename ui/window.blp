@@ -85,10 +85,25 @@ template $SpruceWindow : Adw.ApplicationWindow {
               margin-start: 16;
               margin-end: 16;
 
-              Gtk.Label {
-                label: "These packages are no longer required";
-                css-classes: ["title-3"];
-                halign: start;
+              Gtk.Box {
+                orientation: horizontal;
+                spacing: 12;
+
+                Gtk.Label {
+                  label: "These packages are no longer required";
+                  css-classes: ["title-3"];
+                  halign: start;
+                  hexpand: true;
+                }
+
+                Gtk.Button kept_btn {
+                  icon-name: "help-about-symbolic";
+                  css-classes: ["flat", "circular"];
+                  halign: end;
+                  valign: center;
+                  tooltip-text: "What's hidden?";
+                  sensitive: false;
+                }
               }
 
               Gtk.ScrolledWindow {
