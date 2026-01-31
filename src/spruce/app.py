@@ -1015,7 +1015,7 @@ class SpruceWindow(Adw.ApplicationWindow):
     def _on_options_clicked(self, _btn):
         win = Adw.PreferencesWindow(transient_for=self, modal=True, title=_("Preferences"))
         page = Adw.PreferencesPage()
-        group = Adw.PreferencesGroup(title=_('What to clear when you press "Clear temp"'))
+        group = Adw.PreferencesGroup(title=_('What to clear when you press "Clear cache"'))
         page.add(group)
 
         def add_switch(title, subtitle, key):
