@@ -40,6 +40,9 @@
 
 
   <releases>
+     <release version="0.1.7" date="2026-1-31">
+      <description><p>Added an "About" window and moved the "What's hidden button?" to a small button on the top of the unused packages list.</p></description>
+    </release>
      <release version="0.1.6" date="2025-12-30">
       <description><p>Improved error handling when clearing unused packages, added a mention of freed space after removing a unused package or clearing caches and updated the window subtitle.</p></description>
     </release>
