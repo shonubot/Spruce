@@ -1133,7 +1133,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         actions.append(rm_btn)
         v.append(actions)
 
-        def update_btn(*_a):
+        def update_btn(*args):
             rm_btn.set_sensitive(any(s.get_active() and s.get_sensitive() for s in toggles))
         for s in toggles:
             s.connect("notify::active", update_btn)        
@@ -1146,7 +1146,7 @@ class SpruceWindow(Adw.ApplicationWindow):
             update_btn()
         sel_all.connect("toggled", lambda b: _set_all(b.get_active()))
 
-        def do_rm(_b):
+        def do_rm(btn):
             initial_used_space = disk_usage_home()[1]
             removed = 0
             host_targets: list[Path] = []
@@ -1178,7 +1178,7 @@ try:
 except Exception as e:
     print(f"error: {e}")
 """
-                        code, out, _ = _run(_host_exec("python3", "-c", script))
+                        code, out, _err = _run(_host_exec("python3", "-c", script))
                         if code == 0 and "success" in out:
                             removed += 1
                     else:
