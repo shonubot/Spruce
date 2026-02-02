@@ -43,7 +43,7 @@ except Exception:
 APP_ID = "io.github.shonubot.Spruce"
 IS_FLATPAK = Path("/.flatpak-info").exists()
 SPRUCE_DEBUG = os.environ.get("SPRUCE_DEBUG") == "1"
-VERSION = "0.1.7" # DONT FORGET TO UPDATE
+VERSION = "0.1.8" # DONT FORGET TO UPDATE
 
 # Initialize translations
 try:

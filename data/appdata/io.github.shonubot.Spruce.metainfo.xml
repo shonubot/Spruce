@@ -40,6 +40,9 @@
 
 
   <releases>
+     <release version="0.1.8" date="2026-2-2">
+      <description><p>Fixed a UnboundLocalError.</p></description>
+    </release>
      <release version="0.1.7" date="2026-1-31">
       <description><p>Added an "About" window and moved the "What's hidden button?" to a small button on the top of the unused packages list.</p></description>
     </release>
