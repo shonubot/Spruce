@@ -1085,7 +1085,7 @@ class SpruceWindow(Adw.ApplicationWindow):
             self._current_toast = None
 
         dlg = Adw.Dialog.new()
-        dlg.set_title(_("Cache sweep"))
+        dlg.set_title(_("System sweep"))
         dlg.present(self)
         dlg.set_content_width(720)
         dlg.set_content_height(520)
@@ -1097,7 +1097,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         v.set_margin_start(12)
         v.set_margin_end(12)
 
-        title = Gtk.Label(label=_("Select the cache files to remove:"), xalign=0)
+        title = Gtk.Label(label=_("Select junk and cache files to remove:"), xalign=0)
         title.add_css_class("title-4")
         v.append(title)
 
