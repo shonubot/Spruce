@@ -292,6 +292,47 @@ for appdir in base.iterdir():
     return sorted(results, key=lambda t: t[1], reverse=True)
 
 
+def _host_snap_cache_entries() -> list[tuple[str, int]]:
+    """Host ~/snap/*/common/.cache directories."""
+    base = Path.home() / "snap"
+    if not IS_FLATPAK:
+        results = []
+        if base.exists():
+            for appdir in base.iterdir():
+                cdir = appdir / "common" / ".cache"
+                if cdir.is_dir():
+                    sz = sum(f.stat().st_size for f in cdir.rglob("*") if f.is_file())
+                    results.append((str(cdir), sz))
+        return sorted(results, key=lambda t: t[1], reverse=True)
+
+    script = """
+import os, sys
+from pathlib import Path
+base = Path.home() / 'snap'
+if not base.is_dir():
+    sys.exit(0)
+for appdir in base.iterdir():
+    cdir = appdir / 'common' / '.cache'
+    if cdir.is_dir():
+        size = 0
+        for f in cdir.rglob('*'):
+            try:
+                if f.is_file():
+                    size += f.stat().st_size
+            except Exception:
+                pass
+        print(f"{size} {cdir}")
+"""
+    code, out, _ = _run(_host_exec("python3", "-c", script))
+    results = []
+    if code == 0 and out.strip():
+        for ln in out.splitlines():
+            parts = ln.strip().split(None, 1)
+            if len(parts) == 2 and parts[0].isdigit():
+                results.append((parts[1], int(parts[0])))
+    return sorted(results, key=lambda t: t[1], reverse=True)
+
+
 def _host_rm_rf(path: Path) -> bool:
     """Delete a host path via rm -rf (guarded by _is_allowed_host_target)."""
     if not _is_allowed_host_target(path):
@@ -716,6 +757,7 @@ def _host_cache_paths_and_sizes() -> list[tuple[str, int]]:
 _ALLOWED_HOST_PREFIXES = [
     Path.home() / ".cache",
     Path.home() / ".var" / "app",
+    Path.home() / "snap",
     Path.home() / ".local" / "share" / "Trash",
 ]
 
@@ -1053,6 +1095,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         Build the sweep list with:
           - host ~/.cache/* (each first-level item)
           - host ~/.var/app/*/cache  (one entry per app cache)
+          - host ~/snap/*/common/.cache (one entry per snap cache)
           - sandbox XDG_CACHE/* (each first-level item)
           - trash bin (if enabled)
         """
@@ -1066,6 +1109,11 @@ class SpruceWindow(Adw.ApplicationWindow):
                 p = Path(apath)
                 app_name = p.parent.name if p.name == "cache" else p.name
                 entries.append((p, sz, True, True, app_name))
+
+            for apath, sz in _host_snap_cache_entries():
+                p = Path(apath)
+                app_name = p.parent.parent.name if p.parts[-1] == ".cache" else p.name
+                entries.append((p, sz, True, True, f"{app_name}"))
 
             for p, sz in _sandbox_first_level_cache_entries():
                 entries.append((p, sz, True, False, p.name))
