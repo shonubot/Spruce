@@ -1073,7 +1073,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         g2 = Adw.PreferencesGroup(title=_("General"))
         page.add(g2)
         row = Adw.SwitchRow(
-            title=_("General cache sweep"), subtitle=_("Pick large items in ~/.cache to remove"), active=self._opts["sweep"]
+            title=_("General cache sweep"), subtitle=_("Pick large items in ~/.cache, ~/.var/app/*/cache and ~/snap/*/common/.cache to remove"), active=self._opts["sweep"]
         )
         row.connect("notify::active", lambda r, *_: self._opts.__setitem__("sweep", r.get_active()))
         g2.add(row)
