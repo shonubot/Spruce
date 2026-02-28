@@ -152,7 +152,7 @@ circular</property>
                     <child>
                       <object class="AdwActionRow">
                         <property name="title">App caches</property>
-                        <property name="subtitle">~/.cache/&amp;lt;app&amp;gt;, ~/.var/app/*/cache, ~/snap/*/common/.cache</property>
+                        <property name="subtitle">~/.cache/*/, ~/.var/app/*/cache, ~/snap/*/common/.cache</property>
                         <property name="activatable">false</property>
                       </object>
                     </child>
