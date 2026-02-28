@@ -831,6 +831,7 @@ class SpruceWindow(Adw.ApplicationWindow):
 
         self._opts = {"thumbs": True, "webkit": True, "fontconf": True, "mesa": True, "sweep": True, "trash": True}
         self._current_toast = None
+        self._preferences_window = None
 
         # Data for dialog
         self._last_hidden: list[str] = []
@@ -1060,7 +1061,18 @@ class SpruceWindow(Adw.ApplicationWindow):
         return removed
 
     def _on_options_clicked(self, _btn):
+        if self._preferences_window is not None:
+            self._preferences_window.present()
+            return
+            
         win = Adw.PreferencesWindow(transient_for=self, modal=True, title=_("Preferences"))
+        self._preferences_window = win
+        
+        def on_close(*args):
+            self._preferences_window = None
+        
+        win.connect("close-request", on_close)
+        
         page = Adw.PreferencesPage()
         group = Adw.PreferencesGroup(title=_('What to clear when you press "System sweep"'))
         page.add(group)
