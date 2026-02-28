@@ -60,15 +60,37 @@ template $SpruceWindow : Adw.ApplicationWindow {
             spacing: 12;
 
             Gtk.Button clear_btn {
-              label: "System sweep";
-              css-classes: ["pill"];
+              css-classes: ["pill", "accent"];
               halign: start;
+              
+              child: Gtk.Box {
+                spacing: 6;
+                
+                Gtk.Image {
+                  icon-name: "user-trash-symbolic";
+                }
+                
+                Gtk.Label {
+                  label: "System sweep";
+                }
+              };
             }
 
             Gtk.Button options_btn {
-              label: "Options";
               css-classes: ["pill"];
               halign: start;
+              
+              child: Gtk.Box {
+                spacing: 6;
+                
+                Gtk.Image {
+                  icon-name: "emblem-system-symbolic";
+                }
+                
+                Gtk.Label {
+                  label: "Options";
+                }
+              };
             }
           }
 
