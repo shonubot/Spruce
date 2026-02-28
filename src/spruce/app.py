@@ -847,6 +847,11 @@ class SpruceWindow(Adw.ApplicationWindow):
         about_btn.add_css_class("flat")
         about_btn.connect("clicked", self.show_about)
         self.header_bar.pack_end(about_btn)
+        
+        # Setup preferences action
+        preferences_action = Gio.SimpleAction.new("preferences", None)
+        preferences_action.connect("activate", lambda *_: self._on_options_clicked(None))
+        self.add_action(preferences_action)
     
     def show_about(self, button):
         about = Adw.AboutWindow(
@@ -1331,7 +1336,9 @@ class SpruceApp(Adw.Application):
         Adw.init()
         
     def do_activate(self):
-        (self.props.active_window or SpruceWindow(application=self)).present()
+        win = self.props.active_window or SpruceWindow(application=self)
+        self.set_accels_for_action("win.preferences", ["<Primary>comma"])
+        win.present()
 
 def main() -> int:
     return SpruceApp().run([])
