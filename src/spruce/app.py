@@ -65,19 +65,14 @@ def _find_ui() -> str:
         return override
 
     here = Path(__file__).resolve()
-    prefix = Path(sys.prefix)
 
     candidates = [
-        Path("/app/share") / APP_ID / "ui" / "window.ui",
-        Path("/app/share") / "spruce" / "ui" / "window.ui",
-        prefix / "share" / APP_ID / "ui" / "window.ui",
-        prefix / "share" / "spruce" / "ui" / "window.ui",
-
+        Path("/app/share/spruce/ui/window.ui"),
+        Path("/usr/share/spruce/ui/window.ui"),
+        Path("/usr/local/share/spruce/ui/window.ui"),
+        here.parent.parent.parent / "ui" / "window.ui",
         here.parent.parent / "ui" / "window.ui",
-        here.parent / "ui" / "window.ui",
         Path.cwd() / "ui" / "window.ui",
-
-        (Path(sys.modules.get("spruce").__file__).parent / "ui" / "window.ui") if "spruce" in sys.modules else Path("/nonexistent")
     ]
 
     for p in candidates:
@@ -87,7 +82,7 @@ def _find_ui() -> str:
         except Exception:
             pass
 
-    return str((prefix / "share" / APP_ID / "ui" / "window.ui"))
+    return str(Path("/usr/share/spruce/ui/window.ui"))
 
 def human_size(n: int) -> str:
     units = ("B", "KiB", "MiB", "GiB", "TiB", "PiB")
