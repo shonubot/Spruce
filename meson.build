@@ -2,12 +2,8 @@ project('spruce', version: '0.1.6', license: 'GPL-3.0-or-later')
 
 py = import('python').find_installation('python3')
 
-py_sources = files(
-  'src/spruce/__init__.py',
-  'src/spruce/__main__.py',
-  'src/spruce/app.py'
-)
-py.install_sources(py_sources, subdir: 'spruce', pure: true)
+install_data('src/spruce/app.py',
+  install_dir: join_paths(get_option('datadir'), 'spruce'))
 
 install_subdir('ui', install_dir: join_paths(get_option('datadir'), 'spruce'))
 

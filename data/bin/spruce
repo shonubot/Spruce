@@ -1,3 +1,18 @@
 #!/usr/bin/env python3
-from spruce.app import main
-raise SystemExit(main())
+import sys
+from pathlib import Path
+
+for prefix in ['/app', '/usr/local', '/usr']:
+    app_path = Path(prefix) / 'share' / 'spruce' / 'app.py'
+    if app_path.exists():
+        exec(open(app_path).read())
+        sys.exit(0)
+        
+# for development
+dev_path = Path(__file__).parent.parent.parent / 'src' / 'spruce' / 'app.py'
+if dev_path.exists():
+    exec(open(dev_path).read())
+    sys.exit(0)
+
+print("Error: Could not find spruce app.py", file=sys.stderr)
+sys.exit(1)
