@@ -79,11 +79,6 @@ accent</property>
                               <object class="GtkBox">
                                 <property name="spacing">6</property>
                                 <child>
-                                  <object class="GtkImage">
-                                    <property name="icon-name">user-trash-symbolic</property>
-                                  </object>
-                                </child>
-                                <child>
                                   <object class="GtkLabel">
                                     <property name="label">System sweep</property>
                                   </object>
@@ -99,11 +94,6 @@ accent</property>
                             <property name="child">
                               <object class="GtkBox">
                                 <property name="spacing">6</property>
-                                <child>
-                                  <object class="GtkImage">
-                                    <property name="icon-name">emblem-system-symbolic</property>
-                                  </object>
-                                </child>
                                 <child>
                                   <object class="GtkLabel">
                                     <property name="label">Options</property>
