@@ -2,16 +2,6 @@
 ### **Spruce**
 **Spruce** is a lightweight cache cleaner and system maintenance tool designed for **GNU/Linux**.
 It helps keep your system fresh by clearing unneeded caches, logs, temporary files and unused Flatpak runtimes in a clean, Adwaita-based GTK interface.
-
-### Features
-
-- **One-click cleaning** for APT, Flatpak, and thumbnail caches
-- **Smart cleanup** options that detect removable cache safely
-- **Live disk usage preview** before cleanup
-- **Adwaita inspired UI** with a green accent
-- **Lightweight** built with GTK4 + Libadwaita, under 1 MB
-- **Python-based** and easy to extend via modules
-
 ---
 
 ### Install
