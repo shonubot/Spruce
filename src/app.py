@@ -800,6 +800,7 @@ def _is_safe_target(p: Path) -> bool:
 class SpruceWindow(Adw.ApplicationWindow):
     __gtype_name__ = "SpruceWindow"
 
+    toast_overlay: Adw.ToastOverlay = Gtk.Template.Child("toast_overlay")
     pie_chart: Gtk.DrawingArea = Gtk.Template.Child("pie_chart")
     clear_btn: Gtk.Button = Gtk.Template.Child("clear_btn")
     options_btn: Gtk.Button = Gtk.Template.Child("options_btn")
@@ -990,7 +991,7 @@ class SpruceWindow(Adw.ApplicationWindow):
 
         def _after():
             if self._current_toast:
-                self._current_toast.close()
+                self._current_toast.dismiss()
                 self._current_toast = None
 
             self._refresh_autoremove_label()
@@ -1141,7 +1142,7 @@ class SpruceWindow(Adw.ApplicationWindow):
 
     def _show_sweep_dialog(self, entries: list[tuple[Path, int, bool, bool, str]]):
         if self._current_toast:
-            self._current_toast.close()
+            self._current_toast.dismiss()
             self._current_toast = None
 
         dlg = Adw.Dialog.new()
@@ -1333,9 +1334,10 @@ except Exception as e:
             section_label(free_mid, _("Free\n{}").format(human_size(free)), r * 0.65)
 
     def _toast(self, text: str):
-        dlg = Adw.AlertDialog.new("Spruce", text)
-        dlg.add_response("ok", "OK"); dlg.set_default_response("ok"); dlg.present(self)
-        return dlg
+        toast = Adw.Toast.new(text)
+        toast.set_timeout(5)
+        self.toast_overlay.add_toast(toast)
+        return toast
 
 class SpruceApp(Adw.Application):
     def __init__(self):
