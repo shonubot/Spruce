@@ -832,6 +832,10 @@ class SpruceWindow(Adw.ApplicationWindow):
         # Data for dialog
         self._last_hidden: list[str] = []
         
+        # Disk usage cache
+        self.disk_data: Tuple[int, int, int] = (1, 0, 1)
+        self._update_disk_data()
+        
         # Initial UI
         self._refresh_autoremove_label()
         self.pie_chart.queue_draw()
@@ -864,6 +868,11 @@ class SpruceWindow(Adw.ApplicationWindow):
             copyright="© 2026 Kavish Advani"
         )
         about.present()
+
+    def _update_disk_data(self):
+        """Update cached disk usage data and redraw chart."""
+        self.disk_data = disk_usage_home()
+        self.pie_chart.queue_draw()
 
     def _refresh_autoremove_label(self):
         if self.timeout_source:
@@ -994,6 +1003,7 @@ class SpruceWindow(Adw.ApplicationWindow):
                 self._current_toast.dismiss()
                 self._current_toast = None
 
+            self._update_disk_data()
             self._refresh_autoremove_label()
 
             app = Gtk.Application.get_default()
@@ -1037,7 +1047,7 @@ class SpruceWindow(Adw.ApplicationWindow):
                 final_used_space = disk_usage_home()[1]
                 freed_space = max(0, initial_used_space - final_used_space)
                 self._toast(_("Selected caches cleared, freeing {}").format(human_size(freed_space)))
-                self.pie_chart.queue_draw()
+                self._update_disk_data()
 
     def _perform_instant_clears(self):
         def rm_rf(p: Path) -> bool:
@@ -1276,7 +1286,7 @@ except Exception as e:
                 final_used_space = disk_usage_home()[1]
                 freed_space = max(0, initial_used_space - final_used_space)
                 self._toast(_("Removed {} item(s), freeing {}").format(removed, human_size(freed_space)))
-                self.pie_chart.queue_draw()
+                self._update_disk_data()
             dlg.close()
 
         rm_btn.connect("clicked", do_rm)
@@ -1296,7 +1306,7 @@ except Exception as e:
             tw, th = layout.get_pixel_size()
             cr.move_to((w - tw)/2, (h - th)/2); PangoCairo.show_layout(cr, layout); return
 
-        total, used, free = disk_usage_home(); frac_used = (used / total) if total else 0.0
+        total, used, free = self.disk_data; frac_used = (used / total) if total else 0.0
         col_used, col_free, col_bg, col_text = "#2ea3d6", "#51d08a", "#3a3a3a", "#e6e6e6"
 
         def set_hex(hexcol: str, a=1.0):
