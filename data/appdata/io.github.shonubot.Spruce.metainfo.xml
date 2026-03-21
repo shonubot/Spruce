@@ -39,7 +39,17 @@
 </description>
 
 
-  <releases>
+<releases>
+  <release version="0.2.0" date="2026-03-21">
+    <description>
+      <ul>
+        <li>Added Snap package caches support</li>
+        <li>Migrated from Adw.AlertDialog to Adw.Toast</li>
+        <li>Migrated from Python site-packages to system datadir</li>
+        <li>Updated to GNOME Runtime 50</li>
+      </ul>
+    </description>
+  </release>
      <release version="0.1.8" date="2026-2-2">
       <description><p>Fixed a UnboundLocalError.</p></description>
     </release>
@@ -71,19 +81,19 @@
 
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/shonubot/Spruce/5e0bab8ebe61b449ca6e10582bdf8e059714f9e2/screenshots/Light/Spruce-main.png</image>
+      <image>https://raw.githubusercontent.com/shonubot/Spruce/da5b20be164ff1bb228b900c0f030fac16c7a12c/screenshots/Light/Spruce-main.png</image>
       <caption>Main view (Light theme)</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/shonubot/Spruce/5e0bab8ebe61b449ca6e10582bdf8e059714f9e2/screenshots/Light/Spruce-sweep.png</image>
+      <image>https://raw.githubusercontent.com/shonubot/Spruce/da5b20be164ff1bb228b900c0f030fac16c7a12c/screenshots/Light/Spruce-sweep.png</image>
       <caption>Cleaning menu (Light theme)</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/shonubot/Spruce/5e0bab8ebe61b449ca6e10582bdf8e059714f9e2/screenshots/Dark/Spruce-main.png</image>
+      <image>https://raw.githubusercontent.com/shonubot/Spruce/da5b20be164ff1bb228b900c0f030fac16c7a12c/screenshots/Dark/Spruce-main.png</image>
       <caption>Main view (Dark theme)</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/shonubot/Spruce/5e0bab8ebe61b449ca6e10582bdf8e059714f9e2/screenshots/Dark/Spruce-sweep.png</image>
+      <image>https://raw.githubusercontent.com/shonubot/Spruce/da5b20be164ff1bb228b900c0f030fac16c7a12c/screenshots/Dark/Spruce-sweep.png</image>
       <caption>Cleaning menu (Dark theme)</caption>
     </screenshot>
   </screenshots>
