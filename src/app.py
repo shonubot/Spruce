@@ -44,6 +44,7 @@ APP_ID = "io.github.shonubot.Spruce"
 IS_FLATPAK = Path("/.flatpak-info").exists()
 SPRUCE_DEBUG = os.environ.get("SPRUCE_DEBUG") == "1"
 VERSION = "0.2.0" # DONT FORGET TO UPDATE
+os.environ["GSK_RENDERER"] = "gl"
 
 # Initialize translations
 try:
