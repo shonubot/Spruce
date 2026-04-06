@@ -835,6 +835,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         # Disk usage cache
         self.disk_data: Tuple[int, int, int] = (1, 0, 1)
         self.cache_size: int = 0
+        self.trash_size: int = 0
         self._update_disk_data()
         
         # Initial UI
@@ -874,6 +875,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         """Update cached disk usage data, calculate cache size, and redraw chart."""
         self.disk_data = disk_usage_home()
         self._calculate_cache_size()
+        self._calculate_trash_size()
         self.pie_chart.queue_draw()
     
     def _calculate_cache_size(self):
@@ -893,6 +895,13 @@ class SpruceWindow(Adw.ApplicationWindow):
             pass
         
         self.cache_size = cache_size
+    
+    def _calculate_trash_size(self):
+        """Calculate trash bin size."""
+        try:
+            self.trash_size = get_trash_size()
+        except Exception:
+            self.trash_size = 0
 
     def _refresh_autoremove_label(self):
         if self.timeout_source:
@@ -1328,9 +1337,11 @@ except Exception as e:
 
         total, used, free = self.disk_data
         cache_size = self.cache_size
-        other_used = max(0, used - cache_size)
+        trash_size = self.trash_size
+        other_used = max(0, used - cache_size - trash_size)
         
         col_cache = "#e5a50a"
+        col_trash = "#c01c28"
         col_other = "#2ea3d6"
         col_free = "#51d08a"
         col_bg = "#3a3a3a"
@@ -1340,7 +1351,7 @@ except Exception as e:
             rgba = Gdk.RGBA(); rgba.parse(hexcol)
             cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, a)
 
-        chart_h = h - 70
+        chart_h = h - 90
         pad = 24; size = max(0, min(w, chart_h) - pad*2); r = size/2; cx, cy = pad + r, pad + r
         set_hex(col_bg); cr.arc(cx, cy, r, 0, 2*math.pi); cr.fill()
 
@@ -1348,6 +1359,7 @@ except Exception as e:
         
         if total > 0:
             cache_ang = (cache_size / total) * 2 * math.pi
+            trash_ang = (trash_size / total) * 2 * math.pi
             other_ang = (other_used / total) * 2 * math.pi
             free_ang = (free / total) * 2 * math.pi
             
@@ -1360,6 +1372,14 @@ except Exception as e:
                 cr.close_path()
                 cr.fill()
                 current += cache_ang
+            
+            if trash_ang > 0.01:
+                set_hex(col_trash)
+                cr.move_to(cx, cy)
+                cr.arc(cx, cy, r, current, current + trash_ang)
+                cr.close_path()
+                cr.fill()
+                current += trash_ang
             
             if other_ang > 0.01:
                 set_hex(col_other)
@@ -1394,12 +1414,18 @@ except Exception as e:
         if total > 0:
             current = start
             cache_ang = (cache_size / total) * 2 * math.pi
+            trash_ang = (trash_size / total) * 2 * math.pi
             other_ang = (other_used / total) * 2 * math.pi
             
             if cache_ang > 0.15:
                 cache_mid = current + cache_ang/2
                 section_label(cache_mid, _("Cache\n{}").format(human_size(cache_size)), r * 0.7)
             current += cache_ang
+            
+            if trash_ang > 0.15:
+                trash_mid = current + trash_ang/2
+                section_label(trash_mid, _("Trash\n{}").format(human_size(trash_size)), r * 0.7)
+            current += trash_ang
             
             if other_ang > 0.15:
                 other_mid = current + other_ang/2
@@ -1429,8 +1455,9 @@ except Exception as e:
             PangoCairo.show_layout(cr, layout)
         
         draw_legend_item(legend_x, legend_y, col_cache, _("Cache: {}").format(human_size(cache_size)))
-        draw_legend_item(legend_x, legend_y + box_size + spacing, col_other, _("Other: {}").format(human_size(other_used)))
-        draw_legend_item(legend_x, legend_y + 2 * (box_size + spacing), col_free, _("Free: {}").format(human_size(free)))
+        draw_legend_item(legend_x, legend_y + box_size + spacing, col_trash, _("Trash: {}").format(human_size(trash_size)))
+        draw_legend_item(legend_x, legend_y + 2 * (box_size + spacing), col_other, _("Other: {}").format(human_size(other_used)))
+        draw_legend_item(legend_x, legend_y + 3 * (box_size + spacing), col_free, _("Free: {}").format(human_size(free)))
 
     def _toast(self, text: str):
         toast = Adw.Toast.new(text)
