@@ -825,7 +825,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         self.kept_btn.connect("clicked", self._on_show_kept_clicked)
         self.timeout_source = None
 
-        self._opts = {"thumbs": True, "webkit": True, "fontconf": True, "mesa": True, "sweep": True, "trash": True}
+        self._opts = {"thumbs": True, "webkit": True, "fontconf": True, "mesa": True, "sweep": True, "trash": True, "show_cache": True, "show_trash": True}
         self._current_toast = None
         self._preferences_window = None
 
@@ -1137,6 +1137,20 @@ class SpruceWindow(Adw.ApplicationWindow):
         row_trash.connect("notify::active", lambda r, *_: self._opts.__setitem__("trash", r.get_active()))
         g2.add(row_trash)
 
+        g3 = Adw.PreferencesGroup(title=_("Pie Chart Categories"))
+        page.add(g3)
+        
+        def add_chart_switch(title, subtitle, key):
+            row = Adw.SwitchRow(title=title, subtitle=subtitle, active=self._opts[key])
+            def on_toggle(r, *_):
+                self._opts[key] = r.get_active()
+                self._update_disk_data()
+            row.connect("notify::active", on_toggle)
+            g3.add(row)
+        
+        add_chart_switch(_("Show cache category"), _("Display cache usage in pie chart"), "show_cache")
+        add_chart_switch(_("Show trash category"), _("Display trash usage in pie chart"), "show_trash")
+
         hb = Adw.HeaderBar()
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         box.append(hb); box.append(page)
@@ -1337,8 +1351,8 @@ except Exception as e:
             cr.move_to((w - tw)/2, (h - th)/2); PangoCairo.show_layout(cr, layout); return
 
         total, used, free = self.disk_data
-        cache_size = self.cache_size
-        trash_size = self.trash_size
+        cache_size = self.cache_size if self._opts["show_cache"] else 0
+        trash_size = self.trash_size if self._opts["show_trash"] else 0
         other_used = max(0, used - cache_size - trash_size)
         
         col_cache = "#e5a50a"
@@ -1455,10 +1469,16 @@ except Exception as e:
             cr.move_to(x + box_size + 6, y - 2)
             PangoCairo.show_layout(cr, layout)
         
-        draw_legend_item(legend_x, legend_y, col_cache, _("Cache: {}").format(human_size(cache_size)))
-        draw_legend_item(legend_x, legend_y + box_size + spacing, col_trash, _("Trash: {}").format(human_size(trash_size)))
-        draw_legend_item(legend_x, legend_y + 2 * (box_size + spacing), col_other, _("Other: {}").format(human_size(other_used)))
-        draw_legend_item(legend_x, legend_y + 3 * (box_size + spacing), col_free, _("Free: {}").format(human_size(free)))
+        legend_items = []
+        if self._opts["show_cache"]:
+            legend_items.append((col_cache, _("Cache: {}").format(human_size(self.cache_size))))
+        if self._opts["show_trash"]:
+            legend_items.append((col_trash, _("Trash: {}").format(human_size(self.trash_size))))
+        legend_items.append((col_other, _("Other: {}").format(human_size(other_used))))
+        legend_items.append((col_free, _("Free: {}").format(human_size(free))))
+        
+        for i, (color, text) in enumerate(legend_items):
+            draw_legend_item(legend_x, legend_y + i * (box_size + spacing), color, text)
 
     def _toast(self, text: str):
         toast = Adw.Toast.new(text)
