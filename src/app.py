@@ -817,7 +817,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         self.pie_chart.set_hexpand(True)
         self.pie_chart.set_vexpand(True)
         self.pie_chart.set_content_width(360)
-        self.pie_chart.set_content_height(260)
+        self.pie_chart.set_content_height(320)
         self.pie_chart.set_draw_func(self._draw_chart, None)
         self.clear_btn.connect("clicked", self._on_clear_clicked)
         self.options_btn.connect("clicked", self._on_options_clicked)
@@ -1340,7 +1340,8 @@ except Exception as e:
             rgba = Gdk.RGBA(); rgba.parse(hexcol)
             cr.set_source_rgba(rgba.red, rgba.green, rgba.blue, a)
 
-        pad = 24; size = max(0, min(w, h) - pad*2); r = size/2; cx, cy = pad + r, pad + r
+        chart_h = h - 70
+        pad = 24; size = max(0, min(w, chart_h) - pad*2); r = size/2; cx, cy = pad + r, pad + r
         set_hex(col_bg); cr.arc(cx, cy, r, 0, 2*math.pi); cr.fill()
 
         start = -math.pi/2
@@ -1409,6 +1410,27 @@ except Exception as e:
             if free_ang > 0.15:
                 free_mid = current + free_ang/2
                 section_label(free_mid, _("Free\n{}").format(human_size(free)), r * 0.7)
+
+        legend_y = chart_h + 15
+        legend_x = 20
+        box_size = 10
+        spacing = 8
+        
+        def draw_legend_item(x, y, color, text):
+            set_hex(color)
+            cr.rectangle(x, y, box_size, box_size)
+            cr.fill()
+            
+            layout = PangoCairo.create_layout(cr)
+            layout.set_text(text)
+            layout.set_font_description(Pango.FontDescription("Cantarell 10"))
+            set_hex(col_text, 0.9)
+            cr.move_to(x + box_size + 6, y - 2)
+            PangoCairo.show_layout(cr, layout)
+        
+        draw_legend_item(legend_x, legend_y, col_cache, _("Cache: {}").format(human_size(cache_size)))
+        draw_legend_item(legend_x, legend_y + box_size + spacing, col_other, _("Other: {}").format(human_size(other_used)))
+        draw_legend_item(legend_x, legend_y + 2 * (box_size + spacing), col_free, _("Free: {}").format(human_size(free)))
 
     def _toast(self, text: str):
         toast = Adw.Toast.new(text)
