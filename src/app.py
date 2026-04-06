@@ -836,11 +836,9 @@ class SpruceWindow(Adw.ApplicationWindow):
         self.disk_data: Tuple[int, int, int] = (1, 0, 1)
         self.cache_size: int = 0
         self.trash_size: int = 0
-        self._update_disk_data()
         
         # Initial UI
         self._refresh_autoremove_label()
-        self.pie_chart.queue_draw()
         
         # Add about button to header bar
         about_btn = Gtk.Button()
@@ -855,6 +853,9 @@ class SpruceWindow(Adw.ApplicationWindow):
         preferences_action = Gio.SimpleAction.new("preferences", None)
         preferences_action.connect("activate", lambda *_: self._on_options_clicked(None))
         self.add_action(preferences_action)
+        
+        # Defer data calculation until window is realized
+        GLib.idle_add(self._update_disk_data)
     
     def show_about(self, button):
         about = Adw.AboutWindow(
