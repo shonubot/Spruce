@@ -834,6 +834,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         
         # Disk usage cache
         self.disk_data: Tuple[int, int, int] = (1, 0, 1)
+        self.cache_size: int = 0
         self._update_disk_data()
         
         # Initial UI
@@ -870,9 +871,28 @@ class SpruceWindow(Adw.ApplicationWindow):
         about.present()
 
     def _update_disk_data(self):
-        """Update cached disk usage data and redraw chart."""
+        """Update cached disk usage data, calculate cache size, and redraw chart."""
         self.disk_data = disk_usage_home()
+        self._calculate_cache_size()
         self.pie_chart.queue_draw()
+    
+    def _calculate_cache_size(self):
+        """Calculate total cache size across all sources."""
+        cache_size = 0
+        
+        try:
+            for apath, sz in _host_first_level_cache_entries():
+                cache_size += sz
+            for apath, sz in _host_app_cache_entries():
+                cache_size += sz
+            for apath, sz in _host_snap_cache_entries():
+                cache_size += sz
+            for p, sz in _sandbox_first_level_cache_entries():
+                cache_size += sz
+        except Exception:
+            pass
+        
+        self.cache_size = cache_size
 
     def _refresh_autoremove_label(self):
         if self.timeout_source:
@@ -1306,8 +1326,15 @@ except Exception as e:
             tw, th = layout.get_pixel_size()
             cr.move_to((w - tw)/2, (h - th)/2); PangoCairo.show_layout(cr, layout); return
 
-        total, used, free = self.disk_data; frac_used = (used / total) if total else 0.0
-        col_used, col_free, col_bg, col_text = "#2ea3d6", "#51d08a", "#3a3a3a", "#e6e6e6"
+        total, used, free = self.disk_data
+        cache_size = self.cache_size
+        other_used = max(0, used - cache_size)
+        
+        col_cache = "#e5a50a"
+        col_other = "#2ea3d6"
+        col_free = "#51d08a"
+        col_bg = "#3a3a3a"
+        col_text = "#e6e6e6"
 
         def set_hex(hexcol: str, a=1.0):
             rgba = Gdk.RGBA(); rgba.parse(hexcol)
@@ -1316,11 +1343,39 @@ except Exception as e:
         pad = 24; size = max(0, min(w, h) - pad*2); r = size/2; cx, cy = pad + r, pad + r
         set_hex(col_bg); cr.arc(cx, cy, r, 0, 2*math.pi); cr.fill()
 
-        start = -math.pi/2; used_ang = frac_used * 2*math.pi
-        set_hex(col_used); cr.move_to(cx, cy); cr.arc(cx, cy, r, start, start+used_ang); cr.close_path(); cr.fill()
-        set_hex(col_free); cr.move_to(cx, cy); cr.arc(cx, cy, r, start+used_ang, start+2*math.pi); cr.close_path(); cr.fill()
+        start = -math.pi/2
+        
+        if total > 0:
+            cache_ang = (cache_size / total) * 2 * math.pi
+            other_ang = (other_used / total) * 2 * math.pi
+            free_ang = (free / total) * 2 * math.pi
+            
+            current = start
+            
+            if cache_ang > 0.01:
+                set_hex(col_cache)
+                cr.move_to(cx, cy)
+                cr.arc(cx, cy, r, current, current + cache_ang)
+                cr.close_path()
+                cr.fill()
+                current += cache_ang
+            
+            if other_ang > 0.01:
+                set_hex(col_other)
+                cr.move_to(cx, cy)
+                cr.arc(cx, cy, r, current, current + other_ang)
+                cr.close_path()
+                cr.fill()
+                current += other_ang
+            
+            if free_ang > 0.01:
+                set_hex(col_free)
+                cr.move_to(cx, cy)
+                cr.arc(cx, cy, r, current, current + free_ang)
+                cr.close_path()
+                cr.fill()
 
-        pct = int(round(frac_used * 100))
+        pct = int(round((used / total) * 100)) if total > 0 else 0
         layout = PangoCairo.create_layout(cr); layout.set_text(f"{pct}%")
         layout.set_font_description(Pango.FontDescription("Cantarell Bold 40"))
         tw, th = layout.get_pixel_size(); set_hex(col_text, 0.95)
@@ -1330,18 +1385,30 @@ except Exception as e:
             lx = cx + math.cos(a_mid) * distance
             ly = cy + math.sin(a_mid) * distance
             layout = PangoCairo.create_layout(cr); layout.set_text(txt)
-            layout.set_font_description(Pango.FontDescription("Cantarell Bold 13"))
+            layout.set_font_description(Pango.FontDescription("Cantarell Bold 11"))
             tw, th = layout.get_pixel_size()
             cr.set_source_rgba(1, 1, 1, 0.95)
             cr.move_to(lx - tw/2, ly - th/2); PangoCairo.show_layout(cr, layout)
 
-        if used_ang > 0.2:
-            used_mid = start + used_ang/2
-            section_label(used_mid, _("Used\n{}").format(human_size(used)), r * 0.65)
-        
-        if (2*math.pi - used_ang) > 0.2:
-            free_mid = start + used_ang + (2*math.pi - used_ang)/2
-            section_label(free_mid, _("Free\n{}").format(human_size(free)), r * 0.65)
+        if total > 0:
+            current = start
+            cache_ang = (cache_size / total) * 2 * math.pi
+            other_ang = (other_used / total) * 2 * math.pi
+            
+            if cache_ang > 0.15:
+                cache_mid = current + cache_ang/2
+                section_label(cache_mid, _("Cache\n{}").format(human_size(cache_size)), r * 0.7)
+            current += cache_ang
+            
+            if other_ang > 0.15:
+                other_mid = current + other_ang/2
+                section_label(other_mid, _("Other\n{}").format(human_size(other_used)), r * 0.7)
+            current += other_ang
+            
+            free_ang = (free / total) * 2 * math.pi
+            if free_ang > 0.15:
+                free_mid = current + free_ang/2
+                section_label(free_mid, _("Free\n{}").format(human_size(free)), r * 0.7)
 
     def _toast(self, text: str):
         toast = Adw.Toast.new(text)
