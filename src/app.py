@@ -679,8 +679,6 @@ def list_flatpak_unused_with_diag(win: Gtk.Widget) -> tuple[list[str], list[str]
                     ref = f"runtime/{name}/{arch}/{branch}"
                 else:
                     continue
-                    kept_all.append(ref)
-                    continue
 
                 if ref in pinned_all:
                     kept_all.append(ref)
