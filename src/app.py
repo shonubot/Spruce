@@ -1104,8 +1104,10 @@ class SpruceWindow(Adw.ApplicationWindow):
         
         def on_close(*args):
             self._preferences_window = None
+            return False
         
         win.connect("close-request", on_close)
+        win.connect("destroy", on_close)
         
         page = Adw.PreferencesPage()
         group = Adw.PreferencesGroup(title=_('What to clear when you press "System sweep"'))
@@ -1165,6 +1167,7 @@ class SpruceWindow(Adw.ApplicationWindow):
           - trash bin (if enabled)
         """
         entries: list[tuple[Path, int, bool, bool, str]] = []
+        
         if self._opts["sweep"]:
             for apath, sz in _host_first_level_cache_entries():
                 p = Path(apath)
