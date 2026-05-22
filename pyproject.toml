@@ -14,3 +14,7 @@ dependencies = ["PyGObject>=3.44"]
 
 [project.scripts]
 spruce = "spruce.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/shonubot/Spruce"
+Issues = "https://github.com/shonubot/Spruce/issues"
