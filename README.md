@@ -9,7 +9,7 @@ It helps keep your system fresh by clearing unneeded caches, logs, temporary fil
 
 The recommended way to install Spruce is throught Flathub:<br>
 <br><a href="https://flathub.org/en/apps/io.github.shonubot.Spruce">
-    <img width="240" alt="Get Spruce on Flathub" src="https://flathub.org/api/badge?locale=en" />
+    <img width="140" height="50" alt="Get Spruce on Flathub" src="https://flathub.org/api/badge?locale=en" />
 </a>
 ```bash
 flatpak install flathub io.github.shonubot.Spruce
