@@ -22,7 +22,6 @@ import re
 import math
 import shutil
 import sys
-import shlex
 import locale
 import gettext
 from pathlib import Path
