@@ -823,7 +823,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         self.kept_btn.connect("clicked", self._on_show_kept_clicked)
         self.timeout_source = None
 
-        self._opts = {"thumbs": True, "webkit": True, "fontconf": True, "mesa": True, "sweep": True, "trash": True, "show_cache": True, "show_trash": True}
+        self._settings = Gio.Settings.new(APP_ID)
         self._current_toast = None
         self._preferences_window = None
 
@@ -1066,7 +1066,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         return None
 
     def _on_clear_clicked(self, _btn):
-        if self._opts["sweep"] or self._opts["trash"]:
+        if self._settings.get_boolean("sweep-enabled") or self._settings.get_boolean("trash-enabled"):
             self._current_toast = self._toast(_("Scanning cache directories..."))
             GLib.Thread.new("cache_scanner", self._scan_cache_in_thread)
         else:
@@ -1088,10 +1088,10 @@ class SpruceWindow(Adw.ApplicationWindow):
 
         removed = False
         c = xdg_cache()
-        if self._opts["thumbs"]:   removed |= rm_rf(c / "thumbnails")
-        if self._opts["webkit"] :  removed |= rm_rf(c / "WebKitGTK") or rm_rf(c / "webkitgtk")
-        if self._opts["fontconf"]: removed |= rm_rf(c / "fontconfig")
-        if self._opts["mesa"]   :  removed |= rm_rf(c / "mesa_shader_cache")
+        if self._settings.get_boolean("clear-thumbs"):   removed |= rm_rf(c / "thumbnails")
+        if self._settings.get_boolean("clear-webkit") :  removed |= rm_rf(c / "WebKitGTK") or rm_rf(c / "webkitgtk")
+        if self._settings.get_boolean("clear-fontconf"): removed |= rm_rf(c / "fontconfig")
+        if self._settings.get_boolean("clear-mesa")   :  removed |= rm_rf(c / "mesa_shader_cache")
         return removed
 
     def _on_options_clicked(self, _btn):
@@ -1114,42 +1114,53 @@ class SpruceWindow(Adw.ApplicationWindow):
         page.add(group)
 
         def add_switch(title, subtitle, key):
-            row = Adw.SwitchRow(title=title, subtitle=subtitle, active=self._opts[key])
-            row.connect("notify::active", lambda r, *_: self._opts.__setitem__(key, r.get_active()))
+            row = Adw.SwitchRow(title=title, subtitle=subtitle, active=self._settings.get_boolean(key))
+            self._settings.bind(key, row, "active", Gio.SettingsBindFlags.DEFAULT)
             group.add(row)
 
-        add_switch("Thumbnail cache", "~/.cache/thumbnails", "thumbs")
-        add_switch("WebKitGTK caches", "~/.cache/WebKitGTK or ~/.cache/webkitgtk", "webkit")
-        add_switch("Fontconfig cache", "~/.cache/fontconfig", "fontconf")
-        add_switch("Mesa shader cache", "~/.cache/mesa_shader_cache", "mesa")
+        add_switch("Thumbnail cache", "~/.cache/thumbnails", "clear-thumbs")
+        add_switch("WebKitGTK caches", "~/.cache/WebKitGTK or ~/.cache/webkitgtk", "clear-webkit")
+        add_switch("Fontconfig cache", "~/.cache/fontconfig", "clear-fontconf")
+        add_switch("Mesa shader cache", "~/.cache/mesa_shader_cache", "clear-mesa")
 
         g2 = Adw.PreferencesGroup(title=_("General"))
         page.add(g2)
         row = Adw.SwitchRow(
-            title=_("General cache sweep"), subtitle=_("Pick large items in ~/.cache, ~/.var/app/*/cache and ~/snap/*/common/.cache to remove"), active=self._opts["sweep"]
+            title=_("General cache sweep"), subtitle=_("Pick large items in ~/.cache, ~/.var/app/*/cache and ~/snap/*/common/.cache to remove"), active=self._settings.get_boolean("sweep-enabled")
         )
-        row.connect("notify::active", lambda r, *_: self._opts.__setitem__("sweep", r.get_active()))
+        self._settings.bind("sweep-enabled", row, "active", Gio.SettingsBindFlags.DEFAULT)
         g2.add(row)
         trash_path = str(trash_dir())
         row_trash = Adw.SwitchRow(
-            title=_("Trash sweep"), subtitle=_("Empty trash bin"), active=self._opts["trash"]
+            title=_("Trash sweep"), subtitle=_("Empty trash bin"), active=self._settings.get_boolean("trash-enabled")
         )
-        row_trash.connect("notify::active", lambda r, *_: self._opts.__setitem__("trash", r.get_active()))
+        self._settings.bind("trash-enabled", row_trash, "active", Gio.SettingsBindFlags.DEFAULT)
         g2.add(row_trash)
 
         g3 = Adw.PreferencesGroup(title=_("Pie Chart Categories"))
         page.add(g3)
         
+        handler_ids = []
+        
         def add_chart_switch(title, subtitle, key):
-            row = Adw.SwitchRow(title=title, subtitle=subtitle, active=self._opts[key])
-            def on_toggle(r, *_):
-                self._opts[key] = r.get_active()
-                self._update_disk_data()
-            row.connect("notify::active", on_toggle)
+            row = Adw.SwitchRow(title=title, subtitle=subtitle, active=self._settings.get_boolean(key))
+            def on_toggle(settings, changed_key):
+                if changed_key == key:
+                    self._update_disk_data()
+            handler_id = self._settings.connect("changed", on_toggle)
+            handler_ids.append(handler_id)
+            self._settings.bind(key, row, "active", Gio.SettingsBindFlags.DEFAULT)
             g3.add(row)
         
-        add_chart_switch(_("Show cache category"), _("Display cache usage in pie chart"), "show_cache")
-        add_chart_switch(_("Show trash category"), _("Display trash usage in pie chart"), "show_trash")
+        add_chart_switch(_("Show cache category"), _("Display cache usage in pie chart"), "show-cache")
+        add_chart_switch(_("Show trash category"), _("Display trash usage in pie chart"), "show-trash")
+        
+        def cleanup_handlers(*_):
+            for handler_id in handler_ids:
+                self._settings.disconnect(handler_id)
+            handler_ids.clear()
+        
+        win.connect("destroy", cleanup_handlers)
 
         hb = Adw.HeaderBar()
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -1168,7 +1179,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         """
         entries: list[tuple[Path, int, bool, bool, str]] = []
         
-        if self._opts["sweep"]:
+        if self._settings.get_boolean("sweep-enabled"):
             for apath, sz in _host_first_level_cache_entries():
                 p = Path(apath)
                 entries.append((p, sz, True, True, p.name))
@@ -1186,7 +1197,7 @@ class SpruceWindow(Adw.ApplicationWindow):
             for p, sz in _sandbox_first_level_cache_entries():
                 entries.append((p, sz, True, False, p.name))
                 
-        if self._opts["trash"]:
+        if self._settings.get_boolean("trash-enabled"):
             trash_size = get_trash_size()
             trash_path = Path.home() / ".local" / "share" / "Trash"
             entries.append((trash_path, trash_size, True, True, "Trash bin"))
@@ -1352,8 +1363,8 @@ except Exception as e:
             cr.move_to((w - tw)/2, (h - th)/2); PangoCairo.show_layout(cr, layout); return
 
         total, used, free = self.disk_data
-        cache_size = self.cache_size if self._opts["show_cache"] else 0
-        trash_size = self.trash_size if self._opts["show_trash"] else 0
+        cache_size = self.cache_size if self._settings.get_boolean("show-cache") else 0
+        trash_size = self.trash_size if self._settings.get_boolean("show-trash") else 0
         other_used = max(0, used - cache_size - trash_size)
         
         col_cache = "#e5a50a"
@@ -1471,9 +1482,9 @@ except Exception as e:
             PangoCairo.show_layout(cr, layout)
         
         legend_items = []
-        if self._opts["show_cache"]:
+        if self._settings.get_boolean("show-cache"):
             legend_items.append((col_cache, _("Cache: {}").format(human_size(self.cache_size))))
-        if self._opts["show_trash"]:
+        if self._settings.get_boolean("show-trash"):
             legend_items.append((col_trash, _("Trash: {}").format(human_size(self.trash_size))))
         legend_items.append((col_other, _("Other: {}").format(human_size(other_used))))
         legend_items.append((col_free, _("Free: {}").format(human_size(free))))

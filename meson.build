@@ -1,6 +1,9 @@
 project('spruce', version: '0.2.0', license: 'GPL-3.0-or-later')
 
 py = import('python').find_installation('python3')
+gnome = import('gnome')
+
+dependency('gio-2.0')
 
 install_data('src/app.py',
   install_dir: join_paths(get_option('datadir'), 'spruce'))
@@ -20,6 +23,13 @@ install_data('data/icons/hicolor/symbolic/apps/io.github.shonubot.Spruce-symboli
 install_data('data/bin/spruce',
   install_dir : get_option('bindir'),
   install_mode: 'rwxr-xr-x'
+)
+
+install_data('data/io.github.shonubot.Spruce.gschema.xml',
+  install_dir: join_paths(get_option('datadir'), 'glib-2.0', 'schemas'))
+
+gnome.post_install(
+  glib_compile_schemas: true
 )
 
 subdir('po')

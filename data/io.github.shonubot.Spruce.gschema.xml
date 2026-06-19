@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="io.github.shonubot.Spruce" path="/io/github/shonubot/Spruce/">
+    <key name="clear-thumbs" type="b">
+      <default>true</default>
+      <summary>Clear thumbnail cache</summary>
+      <description>Clear ~/.cache/thumbnails when performing system sweep</description>
+    </key>
+    <key name="clear-webkit" type="b">
+      <default>true</default>
+      <summary>Clear WebKitGTK caches</summary>
+      <description>Clear ~/.cache/WebKitGTK or ~/.cache/webkitgtk when performing system sweep</description>
+    </key>
+    <key name="clear-fontconf" type="b">
+      <default>true</default>
+      <summary>Clear Fontconfig cache</summary>
+      <description>Clear ~/.cache/fontconfig when performing system sweep</description>
+    </key>
+    <key name="clear-mesa" type="b">
+      <default>true</default>
+      <summary>Clear Mesa shader cache</summary>
+      <description>Clear ~/.cache/mesa_shader_cache when performing system sweep</description>
+    </key>
+    <key name="sweep-enabled" type="b">
+      <default>true</default>
+      <summary>Enable general cache sweep</summary>
+      <description>Pick large items in ~/.cache, ~/.var/app/*/cache and ~/snap/*/common/.cache to remove</description>
+    </key>
+    <key name="trash-enabled" type="b">
+      <default>true</default>
+      <summary>Enable trash sweep</summary>
+      <description>Empty trash bin when performing system sweep</description>
+    </key>
+    <key name="show-cache" type="b">
+      <default>true</default>
+      <summary>Show cache in pie chart</summary>
+      <description>Display cache usage in pie chart</description>
+    </key>
+    <key name="show-trash" type="b">
+      <default>true</default>
+      <summary>Show trash in pie chart</summary>
+      <description>Display trash usage in pie chart</description>
+    </key>
+  </schema>
+</schemalist>
