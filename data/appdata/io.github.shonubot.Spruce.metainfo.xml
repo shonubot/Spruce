@@ -40,6 +40,15 @@
 
 
 <releases>
+  <release version="0.2.1" date="2026-06-20">
+    <description>
+      <ul>
+        <li>Pie chart now shows cache and trash separately</li>
+        <li>Preferences are now saved between sessions</li>
+        <li>Fixed a memory leak with the preferences menu</li>
+      </ul>
+    </description>
+  </release>
   <release version="0.2.0" date="2026-03-21">
     <description>
       <ul>
@@ -81,19 +90,19 @@
 
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/shonubot/Spruce/da5b20be164ff1bb228b900c0f030fac16c7a12c/screenshots/Light/Spruce-main.png</image>
+      <image>https://raw.githubusercontent.com/shonubot/Spruce/e74c88a30d0f9431eeb7f1389587fd5eeb4cbb30/screenshots/Light/Spruce-main.png</image>
       <caption>Main view (Light theme)</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/shonubot/Spruce/da5b20be164ff1bb228b900c0f030fac16c7a12c/screenshots/Light/Spruce-sweep.png</image>
+      <image>https://raw.githubusercontent.com/shonubot/Spruce/e74c88a30d0f9431eeb7f1389587fd5eeb4cbb30/screenshots/Light/Spruce-sweep.png</image>
       <caption>Cleaning menu (Light theme)</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/shonubot/Spruce/da5b20be164ff1bb228b900c0f030fac16c7a12c/screenshots/Dark/Spruce-main.png</image>
+      <image>https://raw.githubusercontent.com/shonubot/Spruce/e74c88a30d0f9431eeb7f1389587fd5eeb4cbb30/screenshots/Dark/Spruce-main.png</image>
       <caption>Main view (Dark theme)</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/shonubot/Spruce/da5b20be164ff1bb228b900c0f030fac16c7a12c/screenshots/Dark/Spruce-sweep.png</image>
+      <image>https://raw.githubusercontent.com/shonubot/Spruce/e74c88a30d0f9431eeb7f1389587fd5eeb4cbb30/screenshots/Dark/Spruce-sweep.png</image>
       <caption>Cleaning menu (Dark theme)</caption>
     </screenshot>
   </screenshots>
