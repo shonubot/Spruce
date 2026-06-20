@@ -1215,12 +1215,16 @@ except Exception as e:
         trash_size = self.trash_size if self._settings.get_boolean("show-trash") else 0
         other_used = max(0, used - cache_size - trash_size)
         
+        style_manager = Adw.StyleManager.get_default()
+        is_dark = style_manager.get_dark()
+        
         col_cache = "#e5a50a"
         col_trash = "#c01c28"
         col_other = "#2ea3d6"
         col_free = "#51d08a"
-        col_bg = "#3a3a3a"
+        col_bg = "#3a3a3a" if is_dark else "#d0d0d0"
         col_text = "#e6e6e6"
+        col_legend = "#e6e6e6" if is_dark else "#1a1a1a"
 
         def set_hex(hexcol: str, a=1.0):
             rgba = Gdk.RGBA(); rgba.parse(hexcol)
@@ -1325,7 +1329,7 @@ except Exception as e:
             layout = PangoCairo.create_layout(cr)
             layout.set_text(text)
             layout.set_font_description(Pango.FontDescription("Cantarell 10"))
-            set_hex(col_text, 0.9)
+            set_hex(col_legend, 0.9)
             cr.move_to(x + box_size + 6, y - 2)
             PangoCairo.show_layout(cr, layout)
         
