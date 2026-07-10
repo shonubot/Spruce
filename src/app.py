@@ -413,9 +413,6 @@ def disk_usage_home() -> Tuple[int, int, int]:
         pass
     return 1, 0, 1
 
-APP_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+(?:\.[A-Za-z0-9_.-]+)+$")
-RUNTIME_LINE_RE = re.compile(r"^Runtime:\s*(.+?)\s*$", re.IGNORECASE)
-
 def _list_runtime_refs_via_flatpak(scope: str) -> list[str]:
     code, out, _ = _run(_host_exec("flatpak", "list", "--runtime", scope, "--columns=ref"))
     refs: list[str] = []
