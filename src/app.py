@@ -25,7 +25,6 @@ import sys
 import locale
 import gettext
 from pathlib import Path
-from typing import List, Tuple
 
 import gi
 gi.require_version("Gtk", "4.0")
@@ -335,7 +334,7 @@ def _host_rm_rf(path: Path) -> bool:
     return code == 0
 
 
-def _disk_usage_home_host() -> Tuple[int, int, int] | None:
+def _disk_usage_home_host() -> tuple[int, int, int] | None:
     """Return (total, used, free) for $HOME from the host using multiple fallbacks."""
     code, out, _ = _run(_host_exec("bash", "-lc",
         'LANG=C df -B1 -P --output=size,used,avail "$HOME" | tail -n1'))
@@ -381,7 +380,7 @@ def _disk_usage_home_host() -> Tuple[int, int, int] | None:
                 pass
     return None
 
-def _gio_fs_usage(path: Path) -> Tuple[int, int, int] | None:
+def _gio_fs_usage(path: Path) -> tuple[int, int, int] | None:
     try:
         info = Gio.File.new_for_path(str(path)).query_filesystem_info(
             "filesystem::size,filesystem::free", None
@@ -395,7 +394,7 @@ def _gio_fs_usage(path: Path) -> Tuple[int, int, int] | None:
         pass
     return None
 
-def disk_usage_home() -> Tuple[int, int, int]:
+def disk_usage_home() -> tuple[int, int, int]:
     if IS_FLATPAK:
         host = _disk_usage_home_host()
         if host:
@@ -676,7 +675,7 @@ class SpruceWindow(Adw.ApplicationWindow):
         self._last_hidden: list[str] = []
         
         # Disk usage cache
-        self.disk_data: Tuple[int, int, int] = (1, 0, 1)
+        self.disk_data: tuple[int, int, int] = (1, 0, 1)
         self.cache_size: int = 0
         self.trash_size: int = 0
         
@@ -1079,10 +1078,10 @@ class SpruceWindow(Adw.ApplicationWindow):
         sc.set_child(listbox)
         v.append(sc)
 
-        toggles: List[Gtk.Switch] = []
-        paths: List[Path] = []
-        deletable: List[bool] = []
-        on_host_flags: List[bool] = []
+        toggles: list[Gtk.Switch] = []
+        paths: list[Path] = []
+        deletable: list[bool] = []
+        on_host_flags: list[bool] = []
 
         for p, sz, can_delete, on_host, display_name in entries:
             loc = "host" if on_host else "sandbox"
