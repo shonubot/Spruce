@@ -782,8 +782,8 @@ class SpruceWindow(Adw.ApplicationWindow):
         v.set_margin_top(12); v.set_margin_bottom(12); v.set_margin_start(12); v.set_margin_end(12)
 
         intro = Gtk.Label(
-            label=_("These items are hidden from removal because they're either pinned by Flatpak "
-                   "or kept for safety (e.g., base Platforms/Locales, SDKs, or essential extensions)."),
+            label=_("These items are hidden from removal because they're too risky to remove"
+                   " (e.g., base Platforms/Locales or SDKs)."),
             xalign=0
         )
         intro.set_wrap(True)
